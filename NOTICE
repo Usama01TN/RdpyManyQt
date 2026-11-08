@@ -1,0 +1,19 @@
+RdpyManyQt
+Copyright (c) 2026 UsamaTN <ininou.oussematn@gmail.com>
+
+RdpyManyQt is a fork of rdpyqt, itself based on rdpy, distributed under the
+GNU General Public License version 3 or later (see LICENSE):
+
+  rdpy    - Copyright (c) 2014-2015 Sylvain Peyrefitte
+            https://github.com/citronneur/rdpy
+  rdpyqt  - Copyright (c) Hajime Nakagami
+            https://github.com/nakagami/rdpyqt
+
+Several parts follow the logic of FreeRDP (https://github.com/FreeRDP/FreeRDP),
+Copyright the FreeRDP contributors, licensed under the Apache License 2.0
+(compatible with the GPL version 3): audio input (channels/audin), graphics
+pipeline presentation (libfreerdp/gdi/gfx.c), connection security and
+disconnect sequence (libfreerdp/core), TCP keep-alive settings.
+
+Modified files carry a "Modified (c) 2026 UsamaTN" line in their header; the
+changes are listed in CHANGELOG.md.

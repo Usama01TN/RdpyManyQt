@@ -1,0 +1,113 @@
+# coding=utf-8
+#
+# Copyright (c) 2014-2015 Sylvain Peyrefitte
+#
+# This file is part of rdpy.
+#
+# rdpy is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+#
+
+"""
+Log engine in RDPY
+Actually very basic log engine
+"""
+from __future__ import absolute_import, division, print_function
+
+
+class Level(object):
+    """
+    @summary: Level log
+    """
+    DEBUG = 0
+    INFO = 1
+    WARNING = 2
+    ERROR = 3
+    NONE = 4
+
+
+# Library default: warnings and errors only, so an application embedding the
+# client (RdpViewerWidget...) does not get the protocol trace in its terminal.
+# rdpyqt selects INFO; set RDPY_LOG_LEVEL=DEBUG (or call set_level) to trace.
+_LOG_LEVEL = Level.WARNING
+_LOG_FILE = False
+_is_debug = _LOG_LEVEL <= Level.DEBUG
+
+
+def set_level(level):
+    """Set log level and update fast-check flags."""
+    global _LOG_LEVEL, _is_debug
+    _LOG_LEVEL = level
+    _is_debug = level <= Level.DEBUG
+
+
+def log(message):
+    """
+    @summary: Main log function
+    @param message: string to print
+    """
+    if _LOG_FILE:
+        f = open(_LOG_FILE, "a+")
+        f.write("%s\n" % message)
+        f.close()
+    print("[*] %s" % message)
+
+
+def error(message):
+    """
+    @summary: Log error message
+    @param message: string to print as error log
+    """
+    if _LOG_LEVEL > Level.ERROR:
+        return
+    log("ERROR:\t%s" % message)
+
+
+def warning(message):
+    """
+    @summary: Log warning message
+    @param message: string to print as warning log
+    """
+    if _LOG_LEVEL > Level.WARNING:
+        return
+    log("WARNING:\t%s" % message)
+
+
+def info(message):
+    """
+    @summary: Log info message
+    @param message: string to print as info log
+    """
+    if _LOG_LEVEL > Level.INFO:
+        return
+    log("INFO:\t%s" % message)
+
+
+def debug(message):
+    """
+    @summary: Log debug message
+    @param message: string to print as debug log
+    """
+    if _LOG_LEVEL > Level.DEBUG:
+        return
+    log("DEBUG:\t%s" % message)
+
+
+def _levelFromEnvironment():
+    import os
+    name = os.environ.get('RDPY_LOG_LEVEL', '').upper()
+    if name and hasattr(Level, name):
+        set_level(getattr(Level, name))
+
+
+_levelFromEnvironment()

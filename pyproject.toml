@@ -1,0 +1,76 @@
+[build-system]
+requires = ["setuptools", "wheel", "Cython", "numpy"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rdpymanyqt"
+version = "3.1.3"
+description = "RdpyManyQt: pure-Python Remote Desktop (RDP) client for every Qt binding (fork of rdpyqt)"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+requires-python = ">=3.11"
+authors = [
+    { name = "Sylvain Peyrefitte", email = "citronneur@gmail.com" },
+    { name = "Hajime Nakagami", email = "nakagami@gmail.com" },
+    { name = "UsamaTN", email = "ininou.oussematn@gmail.com" },
+]
+maintainers = [
+    { name = "UsamaTN", email = "ininou.oussematn@gmail.com" },
+]
+dependencies = [
+    "twisted",
+    "pyopenssl",
+    "service_identity",
+    "rsa",
+    "pyasn1",
+    "pycryptodome",
+    "Pillow",
+    "ManyQt",
+    "qt-reactor",
+    "numpy",
+]
+
+[project.urls]
+homepage = "https://github.com/Usama01TN/RdpyManyQt"
+upstream = "https://github.com/nakagami/rdpyqt"
+
+[project.optional-dependencies]
+h264 = ["av"]
+
+[project.scripts]
+rdpyqt = "rdpy.scripts.rdpyqt:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rdpy*"]
+
+[tool.setuptools.package-data]
+"rdpy.ui.rdpviewer.images" = ["*.png"]
+
+# Binary wheels for every platform: see .github/workflows/build-release.yml
+[tool.cibuildwheel]
+build = ["cp311-*", "cp312-*", "cp313-*", "cp314-*"]
+# free-threaded builds (the decoders hold the GIL design), 32-bit x86 (no NumPy wheels)
+skip = ["*t-*", "*-win32", "*-manylinux_i686", "*-musllinux_i686"]
+build-frontend = "build"
+test-command = "python {project}/tools/check_wheel.py"
+# mobile wheels can not run on the build machine; the Windows ARM64 test environment lacks
+# some runtime dependencies on older Pythons
+test-skip = ["*-android_*", "*-ios_*", "*-win_arm64"]
+
+[tool.cibuildwheel.linux]
+archs = ["native"]
+
+[tool.cibuildwheel.macos]
+# one runner builds both Intel and Apple Silicon wheels
+archs = ["x86_64", "arm64"]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }
+
+[tool.cibuildwheel.windows]
+archs = ["native"]
+
+[tool.cibuildwheel.ios]
+archs = ["arm64_iphoneos", "arm64_iphonesimulator", "x86_64_iphonesimulator"]
+
+[tool.cibuildwheel.android]
+archs = ["arm64_v8a", "x86_64"]

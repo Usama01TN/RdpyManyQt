@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400">
+    <defs>
+        <linearGradient id="bbg" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#14213D"/>
+            <stop offset="1" stop-color="#0A0F1E"/>
+        </linearGradient>
+        <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stop-color="#2FD6A8"/>
+            <stop offset="1" stop-color="#1E8FE0"/>
+        </linearGradient>
+        <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+            <path d="M32 0 L0 0 0 32" fill="none" stroke="#FFFFFF" stroke-opacity="0.05" stroke-width="1"/>
+        </pattern>
+    </defs>
+    <rect width="1280" height="400" fill="url(#bbg)"/>
+    <rect width="1280" height="400" fill="url(#grid)"/>
+    <circle cx="1120" cy="70" r="220" fill="#1E8FE0" opacity="0.10"/>
+    <circle cx="1210" cy="360" r="160" fill="#2FD6A8" opacity="0.08"/>
+    <image href="logo.svg" x="80" y="72" width="256" height="256"/>
+    <text x="380" y="190" font-family="Segoe UI, DejaVu Sans, Arial, sans-serif" font-size="92" font-weight="700" fill="#FFFFFF">Rdpy<tspan fill="url(#accent)">ManyQt</tspan></text>
+    <text x="384" y="246" font-family="Segoe UI, DejaVu Sans, Arial, sans-serif" font-size="30" fill="#C9D6EA">Pure-Python RDP client for every Qt binding</text>
+    <rect x="384" y="282" width="760" height="2" fill="url(#accent)" opacity="0.6"/>
+    <text x="384" y="324" font-family="Segoe UI, DejaVu Sans, Arial, sans-serif" font-size="22" fill="#8FA3C0">H.264 · RemoteFX · sound &amp; microphone · clipboard files · drives · NLA / TLS</text>
+</svg>

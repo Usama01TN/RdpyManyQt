@@ -1,0 +1,6 @@
+include README.md LICENSE NOTICE CHANGELOG.md
+recursive-include tools *.py
+recursive-include rdpy *.pyx
+recursive-include rdpy *.png
+recursive-include branding *
+global-exclude *.c

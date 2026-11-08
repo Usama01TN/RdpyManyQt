@@ -1,0 +1,22 @@
+# coding=utf-8
+#
+# Copyright (c) 2026 UsamaTN <ininou.oussematn@gmail.com>
+# This file is part of RdpyManyQt (a fork of rdpyqt / rdpy).
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+"""
+rdpviewer package: embeddable Remote Desktop viewer widget (and its Qt Designer plugin).
+"""
+from __future__ import absolute_import, division, print_function
+from os.path import dirname
+from sys import path
+
+if dirname(__file__) not in path:
+    path.append(dirname(__file__))
+
+try:
+    from .rdpviewer import RdpViewerWidget, ensureQtReactor
+except:
+    from rdpviewer import RdpViewerWidget, ensureQtReactor
+
+__all__ = ['RdpViewerWidget', 'ensureQtReactor']  # type: list[str]

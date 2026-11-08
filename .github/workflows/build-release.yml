@@ -1,0 +1,159 @@
+# RdpyManyQt - build wheels for every platform and publish the GitHub release v<version>
+#
+# Copyright (c) 2026 UsamaTN <ininou.oussematn@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Triggers
+#   push / pull request : build and test every platform (no release)
+#   tag v<version>      : build, then publish the release "v<version>" (python tools/build.py release)
+#   manual run          : "Run workflow", tick "release" to publish v<version> from the selected branch
+#
+# Output: binary wheels (compiled decoders) for
+#   Windows x86-64 / ARM64, Linux x86-64 / ARM64 (manylinux + musllinux),
+#   macOS Intel / Apple Silicon, iOS (device + simulators), Android (arm64-v8a, x86-64)
+# for CPython 3.11 - 3.14 (mobile: the Python versions that support iOS / Android),
+# plus a pure-Python wheel that installs anywhere and the source archive.
+
+name: build-release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ "v*" ]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Publish the GitHub release v<version> (version from pyproject.toml)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Read version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Version from pyproject.toml
+        run: |
+          VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "RdpyManyQt version $VERSION"
+      - name: Tag must match the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "v${{ steps.v.outputs.version }}" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match pyproject.toml version v${{ steps.v.outputs.version }}"
+            exit 1
+          fi
+
+  wheels:
+    name: Wheels ${{ matrix.name }}
+    needs: version
+    runs-on: ${{ matrix.os }}
+    # mobile toolchains are young (PEP 730 / 738): a failure there does not block the release
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86_64,   os: ubuntu-latest,    platform: linux,   experimental: false }
+          - { name: linux-aarch64,  os: ubuntu-24.04-arm, platform: linux,   experimental: false }
+          - { name: windows-amd64,  os: windows-latest,   platform: windows, experimental: false }
+          - { name: windows-arm64,  os: windows-11-arm,   platform: windows, experimental: true }
+          - { name: macos,          os: macos-latest,     platform: macos,   experimental: false }
+          - { name: ios,            os: macos-latest,     platform: ios,     experimental: true }
+          - { name: android,        os: ubuntu-latest,    platform: android, experimental: true }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install cibuildwheel
+        run: python -m pip install "cibuildwheel>=4.3,<5"
+      - name: Build wheels
+        run: python -m cibuildwheel --output-dir wheelhouse --platform ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.name }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
+  pure:
+    name: Pure-Python wheel and source archive
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build
+        run: |
+          python -m pip install build
+          python -m build --sdist --outdir dist
+          NO_CYTHON=1 python -m build --wheel --outdir dist
+      - name: Check the pure-Python wheel
+        run: |
+          python -m pip install dist/*-py3-none-any.whl
+          cd tools && python check_wheel.py --pure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-pure-sdist
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish release v${{ needs.version.outputs.version }}
+    needs: [ version, wheels, pure ]
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          ls -l
+          cd ..
+          {
+            echo "## RdpyManyQt v${{ needs.version.outputs.version }}"
+            echo
+            echo "Install the wheel matching your system and Python (cp311 = Python 3.11 ...):"
+            echo
+            echo '```'
+            echo "pip install rdpymanyqt-${{ needs.version.outputs.version }}-<python>-<platform>.whl"
+            echo '```'
+            echo
+            echo "- \`*-py3-none-any.whl\`: pure Python, any platform (slower decoders)."
+            echo "- iOS / Android wheels are libraries for app packagers (Briefcase, pyside6-android-deploy...)."
+            echo "- Verify downloads with \`SHA256SUMS.txt\`."
+            echo
+            echo "See CHANGELOG.md for the changes."
+          } > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: v${{ needs.version.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          body_path: notes.md
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: true
