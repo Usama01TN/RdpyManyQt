@@ -94,3 +94,7 @@ RdpyManyQt 3.1.3 (2026) - by UsamaTN <ininou.oussematn@gmail.com>, forked from r
 - `project.license` is an SPDX expression (setuptools >= 77) instead of the deprecated table.
 - Every push to main / master publishes the release v<version>, force-moving its tag and
   replacing its assets, even when a platform build fails.
+- Builds survive download outages ("HTTP Error 504: Gateway Time-out" from GitHub release
+  downloads): cibuildwheel's downloads are cached between runs, retried for 15 minutes with
+  mirrors (`tools/cibw.py`), a run that fails with a network error is restarted, and the
+  release job retries its GitHub calls.

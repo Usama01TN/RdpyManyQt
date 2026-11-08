@@ -70,6 +70,11 @@ jobs:
     name: Wheels ${{ matrix.name }}
     needs: version
     runs-on: ${{ matrix.os }}
+    env:
+      # pip (build / test environments, also inside the Linux containers: environment-pass
+      # in pyproject.toml) retries more and waits longer on a slow index
+      PIP_RETRIES: "10"
+      PIP_DEFAULT_TIMEOUT: "60"
     strategy:
       fail-fast: false
       matrix:
@@ -88,9 +93,40 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install cibuildwheel
-        run: python -m pip install "cibuildwheel>=4.3,<5"
+        id: cibw
+        run: |
+          python -m pip install "cibuildwheel>=4.3,<5"
+          python -c "import os, importlib.metadata as m; open(os.environ['GITHUB_OUTPUT'], 'a').write('version=' + m.version('cibuildwheel') + '\n')"
+      # Python installers, virtualenv, iOS / Android Pythons, NuGet... downloaded by an earlier
+      # run: with them a build needs neither GitHub release downloads nor python.org
+      - name: Restore the cibuildwheel download cache
+        id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/cibw-cache
+          key: cibw-${{ matrix.name }}-${{ steps.cibw.outputs.version }}
+          restore-keys: |
+            cibw-${{ matrix.name }}-${{ steps.cibw.outputs.version }}-partial-
+            cibw-${{ matrix.name }}-
+      # tools/cibw.py: cibuildwheel with downloads retried for 15 minutes (mirrors for GitHub
+      # release files, checksums verified) and the run restarted after a network error
       - name: Build wheels
-        run: python -m cibuildwheel --output-dir wheelhouse --platform ${{ matrix.platform }}
+        id: build
+        run: python tools/cibw.py --output-dir wheelhouse --platform ${{ matrix.platform }}
+        env:
+          CIBW_CACHE_PATH: ${{ runner.temp }}/cibw-cache
+      # saved even when the build failed (as a "partial" cache the next run starts from), so
+      # the files already downloaded are kept; the complete key only after a successful build
+      - name: Save the cibuildwheel download cache
+        if: ${{ !cancelled() && steps.cache.outputs.cache-hit != 'true' && steps.cibw.outputs.version != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/cibw-cache
+          key: >-
+            ${{ steps.build.outcome == 'success'
+            && format('cibw-{0}-{1}', matrix.name, steps.cibw.outputs.version)
+            || format('cibw-{0}-{1}-partial-{2}-{3}', matrix.name, steps.cibw.outputs.version, github.run_id, github.run_attempt) }}
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.name }}
@@ -183,8 +219,11 @@ jobs:
           fi
       - name: Force-push tag ${{ env.TAG }} to this commit
         run: |
+          # GitHub outages: 5 tries over about 5 minutes
+          retry() { for n in 1 2 3 4 5; do "$@" && return 0; [ $n = 5 ] && return 1; echo "::warning::'$*' failed, retry in $((n * 30)) s"; sleep $((n * 30)); done; }
           # commit the remote tag points to (the peeled ^{} line of an annotated tag comes last)
-          current=$(git ls-remote --tags origin | awk -v t="refs/tags/$TAG" '$2 == t || $2 == t "^{}" { sha = $1 } END { print sha }')
+          retry git ls-remote --tags origin > remote-tags.txt
+          current=$(awk -v t="refs/tags/$TAG" '$2 == t || $2 == t "^{}" { sha = $1 } END { print sha }' remote-tags.txt)
           if [ "$current" = "$GITHUB_SHA" ]; then
             echo "$TAG already points to $GITHUB_SHA"
             exit 0
@@ -194,25 +233,40 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag --force --annotate "$TAG" --message "RdpyManyQt $TAG" "$GITHUB_SHA"
           # (a tag pushed with GITHUB_TOKEN does not start another workflow run)
-          git push --force origin "refs/tags/$TAG"
+          retry git push --force origin "refs/tags/$TAG"
       - name: Publish release ${{ env.TAG }} (create or replace)
         run: |
+          # GitHub outages: 5 tries over about 5 minutes (every step below can be repeated)
+          retry() { for n in 1 2 3 4 5; do "$@" && return 0; [ $n = 5 ] && return 1; echo "::warning::'$*' failed, retry in $((n * 30)) s"; sleep $((n * 30)); done; }
+          release_exists() {  # 0: yes, 1: no, 2: GitHub did not answer
+            local out
+            out=$(gh api "repos/$GH_REPO/releases/tags/$TAG" --jq .id 2>&1) && return 0
+            case "$out" in *"Not Found"*|*"HTTP 404"*) return 1 ;; esac
+            echo "$out" >&2
+            return 2
+          }
+          ensure_release() {
+            local rc=0
+            release_exists || rc=$?
+            [ "$rc" = 0 ] && return 0
+            [ "$rc" = 2 ] && return 1
+            # a create that failed half-way may still have created the release
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag || release_exists
+          }
           # GitHub's generated changelog, appended to the notes (not fatal if unavailable)
           if gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$TAG" \
                -f target_commitish="$GITHUB_SHA" --jq .body > generated.md 2>/dev/null; then
             { echo; cat generated.md; } >> notes.md
           fi
-          if gh release view "$TAG" > /dev/null 2>&1; then
-            gh release edit "$TAG" --title "$TAG" --notes-file notes.md --draft=false
-            gh release upload "$TAG" dist/* --clobber
-            # drop assets of an earlier build that this build did not produce, so the
-            # release matches the tagged commit
-            gh release view "$TAG" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
-              if [ ! -e "dist/$asset" ]; then
-                echo "removing stale asset $asset"
-                gh release delete-asset "$TAG" "$asset" --yes
-              fi
-            done
-          else
-            gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md --verify-tag
-          fi
+          retry ensure_release
+          retry gh release edit "$TAG" --title "$TAG" --notes-file notes.md --draft=false
+          retry gh release upload "$TAG" dist/* --clobber
+          # drop assets of an earlier build that this build did not produce, so the release
+          # matches the tagged commit
+          retry gh release view "$TAG" --json assets --jq '.assets[].name' > assets.txt
+          while IFS= read -r asset; do
+            if [ -n "$asset" ] && [ ! -e "dist/$asset" ]; then
+              echo "removing stale asset $asset"
+              retry gh release delete-asset "$TAG" "$asset" --yes
+            fi
+          done < assets.txt

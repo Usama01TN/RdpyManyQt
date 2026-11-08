@@ -68,6 +68,12 @@ the release notes say wheels are missing). Pull requests only build. To (re)tag 
 python tools/build.py release      # force-tags v<version> on HEAD and force-pushes the tag
 ```
 
+Network outages do not fail the build: the workflow keeps cibuildwheel's downloads (Python
+installers, virtualenv, iOS / Android Pythons) in the GitHub Actions cache, and runs
+cibuildwheel through `tools/cibw.py`, which retries each download for 15 minutes (falling back
+to mirrors of GitHub release files, checksums verified) and restarts a run that failed with a
+network error. The release job retries its GitHub calls the same way.
+
 The mobile wheels are libraries for app packagers (Briefcase, pyside6-android-deploy);
 running the client on a phone also needs Qt and the other dependencies built for it.
 

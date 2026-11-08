@@ -78,6 +78,8 @@ test-skip = ["*-android_*", "*-ios_*"]
 
 [tool.cibuildwheel.linux]
 archs = ["native"]
+# pip's retry settings from the CI job, into the build containers (ignored when unset)
+environment-pass = ["PIP_RETRIES", "PIP_DEFAULT_TIMEOUT"]
 
 [tool.cibuildwheel.macos]
 # one runner builds both Intel and Apple Silicon wheels (Intel ones are tested under Rosetta)

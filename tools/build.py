@@ -56,7 +56,8 @@ def main(argv):
     elif action == 'sdist':
         run([py, '-m', 'build', '--sdist', '--outdir', 'dist'])
     elif action == 'cibw':
-        cmd = [py, '-m', 'cibuildwheel', '--output-dir', 'wheelhouse']
+        # tools/cibw.py: cibuildwheel that survives download outages (see its docstring)
+        cmd = [py, os.path.join('tools', 'cibw.py'), '--output-dir', 'wheelhouse']
         if rest:
             cmd += ['--platform', rest[0]]
         run(cmd)
