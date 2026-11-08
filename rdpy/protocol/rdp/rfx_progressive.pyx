@@ -26,12 +26,11 @@ Handles RDPGFX_CODECID_CAPROGRESSIVE (0x0009) in WIRE_TO_SURFACE_PDU_2.
 
 import struct
 import numpy as np
-cimport numpy as np
+# typed memoryviews only: no NumPy C API, so NumPy is not a build dependency
+# (iOS / Android cross builds have no target NumPy to compile against)
 from libc.stdint cimport uint8_t, uint16_t, uint32_t, uint64_t, int16_t, int32_t
 from libc.stdlib cimport calloc, free
 from libc.string cimport memcpy, memset
-
-np.import_array()
 
 import rdpy.core.log as log
 
@@ -1395,12 +1394,12 @@ cdef class RfxProgressiveDecoder:
 # Python Wrapper functions for external compatibility
 # ---------------------------------------------------------------
 
-def _inverse_dwt_2d(np.ndarray[int16_t, ndim=1] coeffs):
-    _cy_inverse_dwt_2d(<int16_t*>coeffs.data)
+def _inverse_dwt_2d(int16_t[::1] coeffs not None):
+    _cy_inverse_dwt_2d(&coeffs[0])
 
 
-def _inverse_dwt_extrapolate(np.ndarray[int16_t, ndim=1] buffer):
-    _cy_inverse_dwt_extrapolate(<int16_t*>buffer.data)
+def _inverse_dwt_extrapolate(int16_t[::1] buffer not None):
+    _cy_inverse_dwt_extrapolate(&buffer[0])
 
 
 def _place_tile_abs(y_coeffs, cb_coeffs, cr_coeffs,
@@ -1410,18 +1409,18 @@ def _place_tile_abs(y_coeffs, cb_coeffs, cr_coeffs,
     if isinstance(cb_coeffs, (tuple, list)): cb_coeffs = cb_coeffs[0]
     if isinstance(cr_coeffs, (tuple, list)): cr_coeffs = cr_coeffs[0]
 
-    cdef np.ndarray[int16_t, ndim=1] y_arr = y_coeffs
-    cdef np.ndarray[int16_t, ndim=1] cb_arr = cb_coeffs
-    cdef np.ndarray[int16_t, ndim=1] cr_arr = cr_coeffs
+    cdef const int16_t[::1] y_arr = y_coeffs
+    cdef const int16_t[::1] cb_arr = cb_coeffs
+    cdef const int16_t[::1] cr_arr = cr_coeffs
 
     cdef uint8_t[:] out_mv
     if isinstance(output, (bytes, bytearray, memoryview, np.ndarray)):
         out_mv = np.frombuffer(output, dtype=np.uint8)
     else:
         out_mv = output
-    _cy_place_tile_abs(<int16_t*>y_arr.data,
-                       <int16_t*>cb_arr.data,
-                       <int16_t*>cr_arr.data,
+    _cy_place_tile_abs(&y_arr[0],
+                       &cb_arr[0],
+                       &cr_arr[0],
                        tile_x, tile_y,
                        &out_mv[0], out_w, out_h)
 
@@ -1442,22 +1441,25 @@ def _decode_component(data, quant_obj, prev_dequant=None, is_diff=False, extrapo
         q = _c_default_quant()
 
     cdef CRfxQuant shift = _c_prog_quant_shift(q, q, 0)
-    cdef np.ndarray[int16_t, ndim=1] out_pixels = np.empty(4096, dtype=np.int16)
-    cdef np.ndarray[int16_t, ndim=1] out_dequant = np.empty(4096, dtype=np.int16)
-    cdef np.ndarray[int16_t, ndim=1] out_raw_sign = np.empty(4096, dtype=np.int16)
+    out_pixels = np.empty(4096, dtype=np.int16)
+    out_dequant = np.empty(4096, dtype=np.int16)
+    out_raw_sign = np.empty(4096, dtype=np.int16)
+    cdef int16_t[::1] pixels_mv = out_pixels
+    cdef int16_t[::1] dequant_mv = out_dequant
+    cdef int16_t[::1] raw_sign_mv = out_raw_sign
 
     cdef bytes b_data = bytes(data) if data else b''
     cdef const uint8_t* p_data = <const uint8_t*>b_data if b_data else NULL
     cdef int dlen = len(b_data)
 
     cdef const int16_t* p_prev = NULL
-    cdef np.ndarray[int16_t, ndim=1] prev_arr
+    cdef const int16_t[::1] prev_arr
     if prev_dequant is not None:
         prev_arr = prev_dequant
-        p_prev = <const int16_t*>prev_arr.data
+        p_prev = &prev_arr[0]
 
     _c_decode_component(p_data, dlen, shift, p_prev, 1 if is_diff else 0, 1 if extrapolate else 0,
-                        <int16_t*>out_pixels.data,
-                        <int16_t*>out_dequant.data,
-                        <int16_t*>out_raw_sign.data)
+                        &pixels_mv[0],
+                        &dequant_mv[0],
+                        &raw_sign_mv[0])
     return out_pixels, out_dequant, out_raw_sign

@@ -13,9 +13,10 @@ RdpyManyQt build helper (local builds and releases).
     python tools/build.py cibw [PLATFORM]  cibuildwheel for this machine, or for
                                            android / ios (needs the matching SDK)
     python tools/build.py check [--pure]   check the installed wheel
-    python tools/build.py release          tag v<version> and push it: the GitHub
-                                           workflow builds every platform and publishes
-                                           the release "v<version>"
+    python tools/build.py release          tag v<version> on HEAD and force-push it: the
+                                           GitHub workflow builds every platform and
+                                           publishes (or replaces) the release "v<version>"
+                                           (every push to main / master does that too)
 Wheels go to ./dist (./wheelhouse for cibuildwheel).
 """
 from __future__ import absolute_import, division, print_function
@@ -65,8 +66,9 @@ def main(argv):
         tag = 'v' + version()
         if subprocess.call(['git', 'diff', '--quiet', 'HEAD'], cwd=ROOT) != 0:
             sys.exit("commit your changes before releasing")
-        run(['git', 'tag', '-a', tag, '-m', 'RdpyManyQt ' + tag])
-        run(['git', 'push', 'origin', tag])
+        # the workflow may already have created the tag on an earlier commit: move it
+        run(['git', 'tag', '--force', '-a', tag, '-m', 'RdpyManyQt ' + tag])
+        run(['git', 'push', '--force', 'origin', 'refs/tags/' + tag])
         print("pushed %s: the GitHub workflow now builds and publishes the release" % tag)
     else:
         sys.exit("unknown action %r\n%s" % (action, __doc__))

@@ -45,10 +45,9 @@ import struct
 import sys
 import time
 import numpy as np
-cimport numpy as np
+# typed memoryviews only: no NumPy C API, so NumPy is not a build dependency
+# (iOS / Android cross builds have no target NumPy to compile against)
 from libc.stdint cimport uint8_t, uint16_t
-
-np.import_array()
 
 import rdpy.core.log as log
 

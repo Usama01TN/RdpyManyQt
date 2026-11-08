@@ -81,3 +81,16 @@ RdpyManyQt 3.1.3 (2026) - by UsamaTN <ininou.oussematn@gmail.com>, forked from r
   keyboard layout / type, security preset, audio latency, shell, timeouts...).
 - File transfer events: clipboard upload / download started, progress, finished; shared-drive
   files read / written (callbacks, Qt signals, `--on-transfer-start`, `--on-transfer-done`).
+
+## Packaging:
+
+- Wheels for CPython 3.11 - 3.15 (iOS / Android 3.13 - 3.15) and for 32-bit Windows; the
+  Windows ARM64 wheels are now tested too.
+- The Cython decoders use typed memoryviews instead of the NumPy C API: NumPy is no longer a
+  build dependency, which fixes the iOS and Android builds (no NumPy exists for those targets
+  at build time). Decoded output is byte-identical.
+- Intel macOS installs cryptography 48 (the last release with an Intel wheel) instead of
+  compiling cryptography 49+ from source; wheel tests never compile cryptography.
+- `project.license` is an SPDX expression (setuptools >= 77) instead of the deprecated table.
+- Every push to main / master publishes the release v<version>, force-moving its tag and
+  replacing its assets, even when a platform build fails.

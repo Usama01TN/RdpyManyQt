@@ -6,10 +6,9 @@ Same semantics as rlgr1_decode.py; this .so shadows the .py when compiled.
 """
 
 import numpy as np
-cimport numpy as np
-from numpy cimport int16_t
-
-np.import_array()
+# typed memoryviews only: no NumPy C API, so NumPy is not a build dependency
+# (iOS / Android cross builds have no target NumPy to compile against)
+from libc.stdint cimport int16_t
 
 # RLGR1 constants
 DEF _LSGR = 3

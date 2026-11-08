@@ -45,27 +45,35 @@ audio stay responsive. Set `RDPY_GFX_THREAD=0` to decode on the network thread i
 `.github/workflows/build-release.yml` builds RdpyManyQt with
 [cibuildwheel](https://cibuildwheel.pypa.io) on GitHub Actions:
 
-| Platform                      | Architectures                     | Python                                |
-|-------------------------------|-----------------------------------|---------------------------------------|
-| Windows                       | x86-64, ARM64                     | 3.11 - 3.14                           |
-| Linux (manylinux + musllinux) | x86-64, ARM64                     | 3.11 - 3.14                           |
-| macOS (11+)                   | Intel, Apple Silicon              | 3.11 - 3.14                           |
-| iOS                           | device, simulator (ARM64, x86-64) | versions with iOS support (3.13+)     |
-| Android                       | arm64-v8a, x86-64                 | versions with Android support (3.13+) |
+| Platform                      | Architectures                     | Python                                       |
+|-------------------------------|-----------------------------------|----------------------------------------------|
+| Windows                       | x86-64, x86 (32-bit), ARM64       | 3.11 - 3.15                                  |
+| Linux (manylinux + musllinux) | x86-64, ARM64                     | 3.11 - 3.15                                  |
+| macOS (11+)                   | Intel, Apple Silicon              | 3.11 - 3.15                                  |
+| iOS                           | device, simulator (ARM64, x86-64) | versions with iOS support (3.13 - 3.15)      |
+| Android                       | arm64-v8a, x86-64                 | versions with Android support (3.13 - 3.15)  |
 
 plus a pure-Python wheel (`py3-none-any`, any platform) and the source archive. Every desktop
-wheel is installed and checked (`tools/check_wheel.py`) before it is kept. Pushes and pull
-requests only build; to publish, bump `version` in `pyproject.toml`, commit, then
+wheel is installed and checked (`tools/check_wheel.py`) before it is kept. The decoders need
+Cython and a C compiler to build, not NumPy (NumPy is only a runtime dependency).
+
+Every push to `main` / `master` (and every tag `v*`, or a manual run of the workflow)
+publishes the GitHub release **v&lt;version&gt;** (`version` in `pyproject.toml`) with every
+wheel and a `SHA256SUMS.txt`: the tag is force-moved to the built commit and the release
+assets are replaced. Bump the version to start a new release instead of updating the current
+one. The release is published even if a platform fails (the run is still marked failed and
+the release notes say wheels are missing). Pull requests only build. To (re)tag by hand:
 
 ```sh
-python tools/build.py release      # tags v<version> and pushes the tag
+python tools/build.py release      # force-tags v<version> on HEAD and force-pushes the tag
 ```
 
-and the workflow publishes the GitHub release **v&lt;version&gt;** with every wheel and a
-`SHA256SUMS.txt` (or run the workflow by hand with *release* ticked). iOS, Android and Windows
-ARM64 builds are marked experimental: a failure there does not block the release. The mobile
-wheels are libraries for app packagers (Briefcase, pyside6-android-deploy); running the client
-on a phone also needs Qt and the other dependencies built for it.
+The mobile wheels are libraries for app packagers (Briefcase, pyside6-android-deploy);
+running the client on a phone also needs Qt and the other dependencies built for it.
+
+32-bit Windows and Windows ARM64: recent cryptography releases (needed by pyOpenSSL) publish
+no wheels there, so install with `pip install --only-binary cryptography rdpymanyqt` to get
+the last release that has one instead of compiling it (Intel Macs get it automatically).
 
 Local builds: `python tools/build.py wheel | pure | sdist | cibw [android|ios] | check`.
 

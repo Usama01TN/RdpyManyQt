@@ -4,15 +4,23 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Triggers
-#   push / pull request : build and test every platform (no release)
-#   tag v<version>      : build, then publish the release "v<version>" (python tools/build.py release)
-#   manual run          : "Run workflow", tick "release" to publish v<version> from the selected branch
+#   push (main / master)  : build every platform, then publish the release "v<version>"
+#   tag v<version>        : same (python tools/build.py release)
+#   manual run            : "Run workflow" builds and publishes from the selected branch
+#                           (untick "release" to only build)
+#   pull request          : build and test only (a pull request never publishes)
+#
+# The release is never skipped on a push: it publishes whatever was built, even when a
+# platform failed (that job still turns the run red). The tag v<version> is force-moved to
+# the built commit and the release assets are replaced, so pushing again without bumping
+# the version in pyproject.toml republishes the same version. (This needs the repository's
+# "immutable releases" setting off: an immutable release can not be updated.)
 #
 # Output: binary wheels (compiled decoders) for
-#   Windows x86-64 / ARM64, Linux x86-64 / ARM64 (manylinux + musllinux),
+#   Windows x86-64 / x86 / ARM64, Linux x86-64 / ARM64 (manylinux + musllinux),
 #   macOS Intel / Apple Silicon, iOS (device + simulators), Android (arm64-v8a, x86-64)
-# for CPython 3.11 - 3.14 (mobile: the Python versions that support iOS / Android),
-# plus a pure-Python wheel that installs anywhere and the source archive.
+# for CPython 3.11 - 3.15 (iOS / Android: 3.13 - 3.15, the first with official mobile
+# support), plus a pure-Python wheel that installs anywhere and the source archive.
 
 name: build-release
 
@@ -24,13 +32,14 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: "Publish the GitHub release v<version> (version from pyproject.toml)"
+        description: "Publish (force-update) the GitHub release v<version> (version from pyproject.toml)"
         type: boolean
-        default: false
+        default: true
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # only superseded pull request runs are cancelled: a push run always reaches its release
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -61,19 +70,18 @@ jobs:
     name: Wheels ${{ matrix.name }}
     needs: version
     runs-on: ${{ matrix.os }}
-    # mobile toolchains are young (PEP 730 / 738): a failure there does not block the release
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
+        # architectures and Python versions: [tool.cibuildwheel] in pyproject.toml
         include:
-          - { name: linux-x86_64,   os: ubuntu-latest,    platform: linux,   experimental: false }
-          - { name: linux-aarch64,  os: ubuntu-24.04-arm, platform: linux,   experimental: false }
-          - { name: windows-amd64,  os: windows-latest,   platform: windows, experimental: false }
-          - { name: windows-arm64,  os: windows-11-arm,   platform: windows, experimental: true }
-          - { name: macos,          os: macos-latest,     platform: macos,   experimental: false }
-          - { name: ios,            os: macos-latest,     platform: ios,     experimental: true }
-          - { name: android,        os: ubuntu-latest,    platform: android, experimental: true }
+          - { name: linux-x86_64,      os: ubuntu-latest,    platform: linux }    # manylinux + musllinux
+          - { name: linux-aarch64,     os: ubuntu-24.04-arm, platform: linux }    # manylinux + musllinux
+          - { name: windows-amd64-x86, os: windows-latest,   platform: windows }  # 64-bit + 32-bit
+          - { name: windows-arm64,     os: windows-11-arm,   platform: windows }
+          - { name: macos,             os: macos-latest,     platform: macos }    # x86_64 + arm64
+          - { name: ios,               os: macos-latest,     platform: ios }      # device + simulators
+          - { name: android,           os: ubuntu-latest,    platform: android }  # arm64-v8a + x86_64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -116,10 +124,21 @@ jobs:
   release:
     name: Publish release v${{ needs.version.outputs.version }}
     needs: [ version, wheels, pure ]
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release)
+    # runs even when a wheel job failed (!cancelled), never for pull requests
+    if: >-
+      ${{ !cancelled() && needs.version.result == 'success' &&
+      (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release)) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    # two runs releasing the same version (a push and its tag) publish one after the other
+    concurrency:
+      group: release-v${{ needs.version.outputs.version }}
+      cancel-in-progress: false
+    env:
+      TAG: v${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -128,18 +147,29 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Checksums and notes
+        env:
+          WHEELS_RESULT: ${{ needs.wheels.result }}
+          PURE_RESULT: ${{ needs.pure.result }}
         run: |
+          if [ -z "$(ls -A dist 2>/dev/null)" ]; then
+            echo "::error::no build produced any file: nothing to publish"
+            exit 1
+          fi
           cd dist
-          sha256sum * > SHA256SUMS.txt
+          sha256sum -- * > SHA256SUMS.txt
           ls -l
           cd ..
           {
-            echo "## RdpyManyQt v${{ needs.version.outputs.version }}"
+            echo "## RdpyManyQt $TAG"
             echo
+            if [ "$WHEELS_RESULT" != "success" ] || [ "$PURE_RESULT" != "success" ]; then
+              echo "> **Note:** some platforms failed to build in [this run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID): their wheels are missing from this release."
+              echo
+            fi
             echo "Install the wheel matching your system and Python (cp311 = Python 3.11 ...):"
             echo
             echo '```'
-            echo "pip install rdpymanyqt-${{ needs.version.outputs.version }}-<python>-<platform>.whl"
+            echo "pip install rdpymanyqt-${TAG#v}-<python>-<platform>.whl"
             echo '```'
             echo
             echo "- \`*-py3-none-any.whl\`: pure Python, any platform (slower decoders)."
@@ -148,12 +178,41 @@ jobs:
             echo
             echo "See CHANGELOG.md for the changes."
           } > notes.md
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.version.outputs.version }}
-          name: v${{ needs.version.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          body_path: notes.md
-          generate_release_notes: true
-          files: dist/*
-          fail_on_unmatched_files: true
+          if [ "$WHEELS_RESULT" != "success" ] || [ "$PURE_RESULT" != "success" ]; then
+            echo "::warning::publishing $TAG without the wheels of the failed platform builds"
+          fi
+      - name: Force-push tag ${{ env.TAG }} to this commit
+        run: |
+          # commit the remote tag points to (the peeled ^{} line of an annotated tag comes last)
+          current=$(git ls-remote --tags origin | awk -v t="refs/tags/$TAG" '$2 == t || $2 == t "^{}" { sha = $1 } END { print sha }')
+          if [ "$current" = "$GITHUB_SHA" ]; then
+            echo "$TAG already points to $GITHUB_SHA"
+            exit 0
+          fi
+          echo "moving $TAG from ${current:-<none>} to $GITHUB_SHA"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --force --annotate "$TAG" --message "RdpyManyQt $TAG" "$GITHUB_SHA"
+          # (a tag pushed with GITHUB_TOKEN does not start another workflow run)
+          git push --force origin "refs/tags/$TAG"
+      - name: Publish release ${{ env.TAG }} (create or replace)
+        run: |
+          # GitHub's generated changelog, appended to the notes (not fatal if unavailable)
+          if gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$TAG" \
+               -f target_commitish="$GITHUB_SHA" --jq .body > generated.md 2>/dev/null; then
+            { echo; cat generated.md; } >> notes.md
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md --draft=false
+            gh release upload "$TAG" dist/* --clobber
+            # drop assets of an earlier build that this build did not produce, so the
+            # release matches the tagged commit
+            gh release view "$TAG" --json assets --jq '.assets[].name' | while IFS= read -r asset; do
+              if [ ! -e "dist/$asset" ]; then
+                echo "removing stale asset $asset"
+                gh release delete-asset "$TAG" "$asset" --yes
+              fi
+            done
+          else
+            gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md --verify-tag
+          fi
