@@ -23,23 +23,26 @@
 @see: https://msdn.microsoft.com/en-us/library/cc226764.aspx
 """
 from __future__ import absolute_import, division, print_function
-import binascii
-import hashlib
-import os
-from rdpy.core.compat import intFromBytes
+from pyasn1.codec.der import encoder as der_encoder
+from pyasn1.codec.der import decoder as der_decoder
+from pyasn1.codec.ber import encoder as ber_encoder
 from pyasn1.type import namedtype, univ, tag
-import pyasn1.codec.der.encoder as der_encoder
-import pyasn1.codec.der.decoder as der_decoder
-import pyasn1.codec.ber.encoder as ber_encoder
-from rdpy.core.type import Stream
 from twisted.internet import protocol
+from rdpy.core.type import Stream
+from binascii import hexlify
 from OpenSSL import crypto
+from hashlib import sha256
+from os import urandom
+from rdpy.core.compat import intFromBytes
 from rdpy.security import x509
 from rdpy.core import error
 from rdpy.core import log
 
 
 class NegoToken(univ.Sequence):
+    """
+    NegoToken class.
+    """
     componentType = namedtype.NamedTypes(
         namedtype.NamedType('negoToken', univ.OctetString().subtype(
             explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 0))),
@@ -174,22 +177,22 @@ def encodeDERTRequest(negoTypes=[], authInfo=None, pubKeyAuth=None, version=2, c
         i += 1
 
     request = TSRequest()
-    request.setComponentByName("version", univ.Integer(version).subtype(
+    request.setComponentByName(u'version', univ.Integer(version).subtype(
         explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 0)))
 
     if i > 0:
-        request.setComponentByName("negoTokens", negoData)
+        request.setComponentByName(u'negoTokens', negoData)
 
     if authInfo is not None:
-        request.setComponentByName("authInfo", univ.OctetString(authInfo).subtype(
+        request.setComponentByName(u'authInfo', univ.OctetString(authInfo).subtype(
             explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 2)))
 
     if pubKeyAuth is not None:
-        request.setComponentByName("pubKeyAuth", univ.OctetString(pubKeyAuth).subtype(
+        request.setComponentByName(u'pubKeyAuth', univ.OctetString(pubKeyAuth).subtype(
             explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 3)))
 
     if clientNonce is not None:
-        request.setComponentByName("clientNonce", univ.OctetString(clientNonce).subtype(
+        request.setComponentByName(u'clientNonce', univ.OctetString(clientNonce).subtype(
             explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 5)))
 
     return der_encoder.encode(request)
@@ -204,28 +207,28 @@ def decodeDERTRequest(s):
 
 
 def getNegoTokens(tRequest):
-    negoData = tRequest.getComponentByName("negoTokens")
+    negoData = tRequest.getComponentByName(u'negoTokens')
     return [Stream(negoData.getComponentByPosition(i).getComponentByPosition(0).asOctets()) for i in
             range(len(negoData))]
 
 
 def getPubKeyAuth(tRequest):
-    return tRequest.getComponentByName("pubKeyAuth").asOctets()
+    return tRequest.getComponentByName(u'pubKeyAuth').asOctets()
 
 
 def encodeDERTCredentials(domain, username, password):
     passwordCred = TSPasswordCreds()
-    passwordCred.setComponentByName("domainName", univ.OctetString(domain).subtype(
+    passwordCred.setComponentByName(u'domainName', univ.OctetString(domain).subtype(
         explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 0)))
-    passwordCred.setComponentByName("userName", univ.OctetString(username).subtype(
+    passwordCred.setComponentByName(u'userName', univ.OctetString(username).subtype(
         explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 1)))
-    passwordCred.setComponentByName("password", univ.OctetString(password).subtype(
+    passwordCred.setComponentByName(u'password', univ.OctetString(password).subtype(
         explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 2)))
 
     credentials = TSCredentials()
-    credentials.setComponentByName("credType", univ.Integer(1).subtype(
+    credentials.setComponentByName(u'credType', univ.Integer(1).subtype(
         explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 0)))
-    credentials.setComponentByName("credentials", univ.OctetString(der_encoder.encode(passwordCred)).subtype(
+    credentials.setComponentByName(u'credentials', univ.OctetString(der_encoder.encode(passwordCred)).subtype(
         explicitTag=tag.Tag(tag.tagClassContext, tag.tagFormatConstructed, 1)))
 
     return der_encoder.encode(credentials)
@@ -267,7 +270,7 @@ class CSSP(protocol.Protocol):
         @param data: string data receive from twisted
         """
         # data: 4.1.2 Client X.224 Connection Request PDU
-        log.debug('CSSP.dataRecievd() len(data)={!r} {}'.format(len(data), binascii.hexlify(data).decode('utf-8')))
+        log.debug('CSSP.dataRecievd() len(data)={!r} {}'.format(len(data), hexlify(data).decode('utf-8')))
         self._layer.dataReceived(data)
 
     def connectionLost(self, reason):
@@ -282,7 +285,7 @@ class CSSP(protocol.Protocol):
         """
         @summary: install proxy
         """
-        log.debug("CSSP.connectionMode()")
+        log.debug(u'CSSP.connectionMode()')
         self._layer.transport = self
         self._layer.getDescriptor = lambda: self.transport
         self._layer.connectionMade()
@@ -292,7 +295,7 @@ class CSSP(protocol.Protocol):
         @summary: write data on transport layer
         @param data: {str}
         """
-        log.debug('CSSP.write() len(data)={!r} {}'.format(len(data), binascii.hexlify(data).decode('utf-8')))
+        log.debug('CSSP.write() len(data)={!r} {}'.format(len(data), hexlify(data).decode('utf-8')))
         self.transport.write(data)
 
     def startTLS(self, sslContext):
@@ -300,7 +303,7 @@ class CSSP(protocol.Protocol):
         @summary: start TLS protocol
         @param sslContext: {ssl.ClientContextFactory | ssl.DefaultOpenSSLContextFactory} context use for TLS protocol
         """
-        log.debug("CSSP.startTLS()")
+        log.debug(u'CSSP.startTLS()')
         self.transport.startTLS(sslContext)
 
     @staticmethod
@@ -339,12 +342,14 @@ class CSSP(protocol.Protocol):
                 # TPKT header: version=0x03, reserved=0x00, length=2 bytes
                 if len(self._recvBuffer) < 4:
                     log.debug(
-                        'CSSP._bufferedDataReceived() buffering {} bytes, need 4 for TPKT header'.format(len(self._recvBuffer)))
+                        'CSSP._bufferedDataReceived() buffering {} bytes, need 4 for TPKT header'.format(
+                            len(self._recvBuffer)))
                     break
                 tpktLen = (self._recvBuffer[2] << 8) | self._recvBuffer[3]
                 if len(self._recvBuffer) < tpktLen:
                     log.debug(
-                        'CSSP._bufferedDataReceived() buffering {} bytes, need {} for TPKT'.format(len(self._recvBuffer), tpktLen))
+                        'CSSP._bufferedDataReceived() buffering {} bytes, need {} for TPKT'.format(
+                            len(self._recvBuffer), tpktLen))
                     break
                 payload = self._recvBuffer[4:tpktLen]
                 self._recvBuffer = self._recvBuffer[tpktLen:]
@@ -356,7 +361,8 @@ class CSSP(protocol.Protocol):
             else:
                 msgLen = self._getDERMessageLength(self._recvBuffer)
                 if msgLen is None or len(self._recvBuffer) < msgLen:
-                    log.debug('CSSP._bufferedDataReceived() buffering {} bytes, need {}'.format(len(self._recvBuffer), msgLen))
+                    log.debug('CSSP._bufferedDataReceived() buffering {} bytes, need {}'.format(
+                        len(self._recvBuffer), msgLen))
                     break
                 msgData = self._recvBuffer[:msgLen]
                 self._recvBuffer = self._recvBuffer[msgLen:]
@@ -369,10 +375,10 @@ class CSSP(protocol.Protocol):
         @param sslContext: {ssl.ClientContextFactory | ssl.DefaultOpenSSLContextFactory} context use for TLS protocol
         @param callback: {function} function call when cssp layer is read
         """
-        log.debug("CSSP.startNLA()")
+        log.debug(u'CSSP.startNLA()')
         self._callback = callback
         self._version = 6
-        self._nonce = os.urandom(32)
+        self._nonce = urandom(32)
         self._recvBuffer = b''
         self.startTLS(sslContext)
         #send negotiate message
@@ -387,12 +393,12 @@ class CSSP(protocol.Protocol):
         @summary: second state in cssp automata
         @param data : {bytes} one complete DER-encoded TSRequest
         """
-        log.debug("CSSP._processChallenge()")
+        log.debug(u'CSSP._processChallenge()')
         request = decodeDERTRequest(data)
         # kept for the session report (Windows version, names, clock)
         self.ntlmChallenge = bytes(data)
         #negotiate version with server
-        serverVersion = int(request.getComponentByName("version"))
+        serverVersion = int(request.getComponentByName(u'version'))
         self._version = min(self._version, serverVersion)
         log.debug('CSSP._processChallenge() negotiated CredSSP version {}'.format(self._version))
 
@@ -400,26 +406,23 @@ class CSSP(protocol.Protocol):
         #get back public key
         #convert from der to ber...
         pkey = self.transport.protocol._tlsConnection.get_peer_certificate().get_pubkey()
-
-        log.debug('CSSP._processChallenge() PEM={}'.format(crypto.dump_publickey(crypto.FILETYPE_PEM, pkey).decode('utf-8')))
-
+        log.debug(
+            'CSSP._processChallenge() PEM={}'.format(crypto.dump_publickey(crypto.FILETYPE_PEM, pkey).decode('utf-8')))
         public_numbers = pkey.to_cryptography_key().public_numbers()
-
         rsa = x509.RSAPublicKey()
-        rsa.setComponentByName("modulus", univ.Integer(public_numbers.n))
-        rsa.setComponentByName("publicExponent", univ.Integer(public_numbers.e))
+        rsa.setComponentByName(u'modulus', univ.Integer(public_numbers.n))
+        rsa.setComponentByName(u'publicExponent', univ.Integer(public_numbers.e))
         self._pubKeyBer = ber_encoder.encode(rsa)
-
         #send authenticate message with public key encoded
         if self._version >= 5:
-            pubKeyData = hashlib.sha256(
-                b"CredSSP Client-To-Server Binding Hash\0" + self._nonce + self._pubKeyBer).digest()
+            pubKeyData = sha256(
+                b'CredSSP Client-To-Server Binding Hash\0' + self._nonce + self._pubKeyBer).digest()
         else:
             pubKeyData = self._pubKeyBer
 
         b = encodeDERTRequest(negoTypes=[message], pubKeyAuth=self._interface.GSS_WrapEx(pubKeyData),
                               version=self._version, clientNonce=self._nonce if self._version >= 5 else None)
-        log.debug('CSSP._processChallenge() send {} len(b)={!r}'.format(binascii.hexlify(b).decode('utf-8'), len(b)))
+        log.debug('CSSP._processChallenge() send {} len(b)={!r}'.format(hexlify(b).decode('utf-8'), len(b)))
         self.transport.write(b)
         #next step is received public key incremented by one
         self._recvHandler = self._processPubKeyInc
@@ -429,22 +432,23 @@ class CSSP(protocol.Protocol):
         @summary: the server send the pubKeyBer + 1 (v2-4) or SHA-256 hash (v5+)
         @param data : {bytes} one complete DER-encoded TSRequest
         """
-        log.debug('CSSP._processPubKeyInc() {} {}'.format(binascii.hexlify(data).decode('utf-8'), len(data)))
+        log.debug('CSSP._processPubKeyInc() {} {}'.format(hexlify(data).decode('utf-8'), len(data)))
         request = decodeDERTRequest(data)
         pubKeyInc = self._interface.GSS_UnWrapEx(getPubKeyAuth(request))
 
         if self._version >= 5:
-            expected = hashlib.sha256(
-                b"CredSSP Server-To-Client Binding Hash\0" + self._nonce + self._pubKeyBer).digest()
+            expected = sha256(
+                b'CredSSP Server-To-Client Binding Hash\0' + self._nonce + self._pubKeyBer).digest()
             if pubKeyInc != expected:
-                raise error.InvalidExpectedDataException("CSSP : Invalid public key hash")
+                raise error.InvalidExpectedDataException(u'CSSP : Invalid public key hash')
         else:
             #check pubKeyInc = self._pubKeyBer + 1
             if not (self._pubKeyBer[1:] == pubKeyInc[1:] and self._pubKeyBer[0] + 1 == pubKeyInc[0]):
-                raise error.InvalidExpectedDataException("CSSP : Invalid public key increment")
+                raise error.InvalidExpectedDataException(u'CSSP : Invalid public key increment')
         domain, user, password = self._authenticationProtocol.getEncodedCredentials()
         log.debug(
-            'CSSP._processPubKeyInc() {} {} {}'.format(binascii.hexlify(domain).decode('utf-8'), binascii.hexlify(user).decode('utf-8'), binascii.hexlify(password).decode('utf-8')))
+            'CSSP._processPubKeyInc() {} {} {}'.format(
+                hexlify(domain).decode('utf-8'), hexlify(user).decode('utf-8'), hexlify(password).decode('utf-8')))
         #send credentials
         self.transport.write(
             encodeDERTRequest(authInfo=self._interface.GSS_WrapEx(encodeDERTCredentials(domain, user, password)),

@@ -43,7 +43,7 @@ if __name__ == '__main__':
 
     print('RdpyManyQt {} ({})'.format(getattr(rdpy, '__version__', '?'), dirname(rdpy.__file__)))
     code = a.exec_() if hasattr(a, 'exec_') else getattr(a, 'exec')()  # type: int
-    # sessions are disconnected by now: return to the console at once
+    # Sessions are disconnected by now: return to the console at once.
     from rdpy.ui.qt import forceExit
 
     forceExit(code)

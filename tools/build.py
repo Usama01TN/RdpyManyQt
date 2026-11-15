@@ -11,8 +11,10 @@ RdpyManyQt build helper (local builds and releases).
     python tools/build.py pure             pure-Python wheel (any platform, slow decoders)
     python tools/build.py sdist            source archive
     python tools/build.py cibw [PLATFORM]  cibuildwheel for this machine, or for
-                                           android / ios (needs the matching SDK)
-    python tools/build.py check [--pure]   check the installed wheel
+                                           android / ios (needs the matching SDK; their
+                                           tests take NumPy / PyAV from pypi.flet.dev
+                                           where it has them, see tools/cibw.py)
+    python tools/build.py check [--pure]   check the installed wheel (python -m rdpy.selftest)
     python tools/build.py release          tag v<version> on HEAD and force-push it: the
                                            GitHub workflow builds every platform and
                                            publishes (or replaces) the release "v<version>"
@@ -20,25 +22,26 @@ RdpyManyQt build helper (local builds and releases).
 Wheels go to ./dist (./wheelhouse for cibuildwheel).
 """
 from __future__ import absolute_import, division, print_function
-import os
-import re
-import subprocess
-import sys
+from sys import argv as sys_argv, executable, exit
+from os.path import abspath, dirname, join
+from subprocess import call, check_call
+from re import M, search
+from os import environ
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ROOT = dirname(dirname(abspath(__file__)))
 
 
 def version():
-    with open(os.path.join(ROOT, 'pyproject.toml')) as f:
-        match = re.search(r'^version\s*=\s*"([^"]+)"', f.read(), re.M)
+    with open(join(ROOT, 'pyproject.toml')) as f:
+        match = search(r'^version\s*=\s*"([^"]+)"', f.read(), M)
     if not match:
-        sys.exit("version not found in pyproject.toml")
+        exit(u'version not found in pyproject.toml')
     return match.group(1)
 
 
 def run(cmd, env=None):
     print('$ ' + ' '.join(cmd))
-    subprocess.check_call(cmd, cwd=ROOT, env=dict(os.environ, **(env or {})))
+    check_call(cmd, cwd=ROOT, env=dict(environ, **(env or {})))
 
 
 def main(argv):
@@ -46,7 +49,7 @@ def main(argv):
         print(__doc__)
         return
     action, rest = argv[0], argv[1:]
-    py = sys.executable
+    py = executable
     if action == 'version':
         print(version())
     elif action == 'wheel':
@@ -57,23 +60,23 @@ def main(argv):
         run([py, '-m', 'build', '--sdist', '--outdir', 'dist'])
     elif action == 'cibw':
         # tools/cibw.py: cibuildwheel that survives download outages (see its docstring)
-        cmd = [py, os.path.join('tools', 'cibw.py'), '--output-dir', 'wheelhouse']
+        cmd = [py, join('tools', 'cibw.py'), '--output-dir', 'wheelhouse']
         if rest:
             cmd += ['--platform', rest[0]]
         run(cmd)
     elif action == 'check':
-        run([py, os.path.join('tools', 'check_wheel.py')] + rest)
+        run([py, join('tools', 'check_wheel.py')] + rest)
     elif action == 'release':
         tag = 'v' + version()
-        if subprocess.call(['git', 'diff', '--quiet', 'HEAD'], cwd=ROOT) != 0:
-            sys.exit("commit your changes before releasing")
+        if call(['git', 'diff', '--quiet', 'HEAD'], cwd=ROOT) != 0:
+            exit(u'commit your changes before releasing')
         # the workflow may already have created the tag on an earlier commit: move it
         run(['git', 'tag', '--force', '-a', tag, '-m', 'RdpyManyQt ' + tag])
         run(['git', 'push', '--force', 'origin', 'refs/tags/' + tag])
-        print("pushed %s: the GitHub workflow now builds and publishes the release" % tag)
+        print(u'pushed %s: the GitHub workflow now builds and publishes the release' % tag)
     else:
-        sys.exit("unknown action %r\n%s" % (action, __doc__))
+        exit(u'unknown action %r\n%s' % (action, __doc__))
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main(sys_argv[1:])

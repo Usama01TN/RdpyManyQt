@@ -6,8 +6,8 @@
 #
 from __future__ import absolute_import, division, print_function
 from rdpy.protocol.rdp.rfx_progressive import RFX_TILE_SIZE, RfxQuant, _decode_component, _place_tile_abs
-import rdpy.core.log as log
 from struct import unpack_from
+from rdpy.core import log
 
 # Block type codes (MS-RDPRFX 2.2.2.1)
 WBT_SYNC = 0xCCC0
@@ -39,7 +39,7 @@ class RfxDecoder(object):
         while offset + 6 <= len(data):
             block_type, block_len = unpack_from('<HI', data, offset)
             if block_len < 6 or offset + block_len > len(data):
-                log.debug("RFX: invalid block type=0x%04X len=%d offset=%d dataLen=%d" %
+                log.debug(u'RFX: invalid block type=0x%04X len=%d offset=%d dataLen=%d' %
                           (block_type, block_len, offset, len(data)))
                 break
             # Blocks 0xCCC3-0xCCC7 have 2 extra header bytes (codecId+channelId)
@@ -56,7 +56,7 @@ class RfxDecoder(object):
             elif block_type == WBT_EXTENSION:
                 quants = self._decode_tileset(content, left, top, surf_data, width, height)
             else:
-                log.debug("RFX: unknown block 0x%04X len=%d" % (block_type, block_len))
+                log.debug(u'RFX: unknown block 0x%04X len=%d' % (block_type, block_len))
             offset += block_len
         if not rects and quants is not None:
             rects = [(left, top, width - left, height - top)]
@@ -80,7 +80,7 @@ class RfxDecoder(object):
             off += 8
         region_type = unpack_from('<H', data, off)[0]
         if region_type != CBT_REGION:
-            log.debug("RFX: unexpected regionType 0x%04X (expected CBT_REGION 0xCAC1)" % region_type)
+            log.debug(u'RFX: unexpected regionType 0x%04X (expected CBT_REGION 0xCAC1)' % region_type)
         return rects
 
     def _decode_tileset(self, data, left, top, surf_data, width, height):
@@ -89,7 +89,7 @@ class RfxDecoder(object):
             return None
         subtype = unpack_from('<H', data, 0)[0]
         if subtype != CBT_TILESET:
-            log.debug("RFX: expected CBT_TILESET (0xCAC2), got 0x%04X" % subtype)
+            log.debug(u'RFX: expected CBT_TILESET (0xCAC2), got 0x%04X' % subtype)
             return None
         num_quant = data[6]
         num_tiles = unpack_from('<H', data, 8)[0]
@@ -107,7 +107,7 @@ class RfxDecoder(object):
                 break
             tile_block_type, tile_block_len = unpack_from('<HI', data, off)
             if tile_block_type != CBT_TILE:
-                log.debug("RFX: expected CBT_TILE (0xCAC3), got 0x%04X" % tile_block_type)
+                log.debug(u'RFX: expected CBT_TILE (0xCAC3), got 0x%04X' % tile_block_type)
                 break
             if tile_block_len < 19 or off + tile_block_len > len(data):
                 break
@@ -119,7 +119,6 @@ class RfxDecoder(object):
 
     def _decode_tile(self, data, quants, left, top, output, out_w, out_h):
         """Decode a single non-progressive RFX tile (CBT_TILE).
-
         Format: quantIdxY(1) quantIdxCb(1) quantIdxCr(1)
                 xIdx(2) yIdx(2) YLen(2) CbLen(2) CrLen(2)
                 YData CbData CrData

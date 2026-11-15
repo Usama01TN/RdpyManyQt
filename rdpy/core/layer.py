@@ -38,7 +38,7 @@ class IStreamListener(object):
         @summary: Signal that data is available
         @param s: Stream
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "recv", "IStreamListener"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'recv', u'IStreamListener'))
 
 
 class IStreamSender(object):
@@ -51,7 +51,7 @@ class IStreamSender(object):
         @summary: Send Stream on layer
         @param data: Type or tuple element handle by transport layer
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "send", "IStreamSender"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'send', u'IStreamSender'))
 
 
 class Layer(object):
@@ -78,7 +78,7 @@ class Layer(object):
                     default is send connect event to presentation layer
         """
         if self._presentation is not None:
-            log.debug("Layer.connect()")
+            log.debug(u'Layer.connect()')
             self._presentation.connect()
 
     def close(self):
@@ -121,8 +121,8 @@ from twisted.internet.abstract import FileDescriptor
 #first that handle stream     
 from .type import Stream
 import socket
-import sys
-import traceback
+from sys import platform
+from traceback import format_exc
 
 # TCP settings, FreeRDP defaults (libfreerdp/core/settings.c, tcp.c):
 # keep-alive after 5 s idle, every 2 s, 3 probes; unacknowledged data
@@ -168,7 +168,7 @@ def applyTcpSettings(transport):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1 if cfg['keepAlive'] else 0)
         if not cfg['keepAlive']:
             return
-        if sys.platform == 'win32' and hasattr(socket, 'SIO_KEEPALIVE_VALS'):
+        if platform == 'win32' and hasattr(socket, 'SIO_KEEPALIVE_VALS'):
             sock.ioctl(socket.SIO_KEEPALIVE_VALS,
                        (1, cfg['keepAliveDelay'] * 1000, cfg['keepAliveInterval'] * 1000))
         else:
@@ -179,7 +179,7 @@ def applyTcpSettings(transport):
                 if hasattr(socket, name):
                     sock.setsockopt(socket.IPPROTO_TCP, getattr(socket, name), int(value))
     except Exception as e:
-        log.debug("TCP keep-alive settings not applied: %s" % e)
+        log.debug(u'TCP keep-alive settings not applied: %s' % e)
 
 
 class RawLayerClientFactory(protocol.ClientFactory):
@@ -202,7 +202,7 @@ class RawLayerClientFactory(protocol.ClientFactory):
         @param addr: destination address
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "buildRawLayer", "RawLayerClientFactory"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'buildRawLayer', u'RawLayerClientFactory'))
 
     def connectionLost(self, rawlayer, reason):
         """
@@ -211,7 +211,7 @@ class RawLayerClientFactory(protocol.ClientFactory):
         @param reason: twisted reason
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "connectionLost", "RawLayerClientFactory"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'connectionLost', u'RawLayerClientFactory'))
 
 
 class RawLayerServerFactory(protocol.ServerFactory):
@@ -233,7 +233,7 @@ class RawLayerServerFactory(protocol.ServerFactory):
         @summary: Override this function to build raw layer
         @param addr: destination address
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "recv", "IStreamListener"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'recv', u'IStreamListener'))
 
     def connectionLost(self, rawlayer, reason):
         """
@@ -241,7 +241,7 @@ class RawLayerServerFactory(protocol.ServerFactory):
         @param rawlayer: rawLayer that cause connectionLost event
         @param reason: twisted reason
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "recv", "IStreamListener"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'recv', u'IStreamListener'))
 
 
 class RawLayer(protocol.Protocol, LayerAutomata, IStreamSender):
@@ -310,9 +310,9 @@ class RawLayer(protocol.Protocol, LayerAutomata, IStreamSender):
             # A PDU the client can not process: end the session at once
             # (FreeRDP: the error is recorded, the transport disconnected)
             # instead of leaving a half-working connection behind.
-            self.protocolError = "%s: %s" % (type(e).__name__, e)
+            self.protocolError = u'%s: %s' % (type(e).__name__, e)
             self.protocolException = e
-            log.error("protocol error, disconnecting: %s\n%s" % (self.protocolError, traceback.format_exc()))
+            log.error(u'protocol error, disconnecting: %s\n%s' % (self.protocolError, format_exc()))
             self.abort()
 
     def connectionMade(self):
@@ -326,7 +326,7 @@ class RawLayer(protocol.Protocol, LayerAutomata, IStreamSender):
         self.protocolError = None
         applyTcpSettings(self.transport)
         #join two scheme
-        log.debug("RawLayer.connect()")
+        log.debug(u'RawLayer.connect()')
         self.connect()
 
     def connectionLost(self, reason):
@@ -363,8 +363,9 @@ class RawLayer(protocol.Protocol, LayerAutomata, IStreamSender):
 
         def force():
             if getattr(tcp, 'connected', False):
-                log.debug("RawLayer.close(): server did not close, aborting the socket")
+                log.debug(u'RawLayer.close(): server did not close, aborting the socket')
                 tcp.abortConnection()
+
         if graceful:
             reactor.callLater(0.5, lose)
         else:
@@ -393,9 +394,7 @@ class RawLayer(protocol.Protocol, LayerAutomata, IStreamSender):
 
     def send(self, message):
         """
-        @summary:  Send Stream on TCP layer
-                    write rdpy Stream message to str
-                    And send it to transport layer
+        @summary:  Send Stream on TCP layer write rdpy Stream message to str And send it to transport layer
         @param message: (tuple | Type)
         """
         s = Stream()

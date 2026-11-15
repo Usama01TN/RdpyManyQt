@@ -9,20 +9,19 @@ Python 2 / 3 compatibility helpers: the code is written in a syntax both
 interpreters accept, and the few standard library differences are hidden here.
 """
 from __future__ import absolute_import, division, print_function
-
-import binascii
-import errno
-import importlib
-import os
-import sys
-import time
+from binascii import hexlify as binascii_hexlify
 from datetime import timedelta, tzinfo
+from importlib import import_module
+from sys import version_info
+from errno import EEXIST
+import time
+import os
 
-PY2 = sys.version_info[0] == 2
+PY2 = version_info[0] == 2
 
 try:
     import queue  # noqa: F401  (Python 3)
-except ImportError:  # Python 2
+except:  # Python 2
     import Queue as queue  # noqa: F401
 
 # monotonic clock (time.monotonic is Python 3.3+)
@@ -32,9 +31,11 @@ try:
     from datetime import timezone
 
     utc = timezone.utc
-except ImportError:
+except:
     class _UTC(tzinfo):
-        """UTC time zone (datetime.timezone.utc of Python 3)."""
+        """
+        UTC time zone (datetime.timezone.utc of Python 3).
+        """
 
         def utcoffset(self, dt):
             return timedelta(0)
@@ -64,7 +65,7 @@ def makedirs(path):
     try:
         os.makedirs(path)
     except OSError as e:
-        if e.errno != errno.EEXIST or not os.path.isdir(path):
+        if e.errno != EEXIST or not os.path.isdir(path):
             raise
 
 
@@ -99,7 +100,7 @@ def intToBytes(value, length, byteorder):
 
 def hexlify(data):
     """bytes.hex() (Python 3.5+)."""
-    return binascii.hexlify(bytes(data)).decode('ascii')
+    return binascii_hexlify(bytes(data)).decode('ascii')
 
 
 class LazyModule(object):
@@ -115,7 +116,7 @@ class LazyModule(object):
     def __getattr__(self, attr):
         module = self.__dict__['_module']
         if module is None:
-            module = importlib.import_module(self.__dict__['_name'])
+            module = import_module(self.__dict__['_name'])
             self.__dict__['_module'] = module
         return getattr(module, attr)
 

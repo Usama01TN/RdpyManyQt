@@ -26,7 +26,7 @@ from rdpy.core.error import CallPureVirtualFuntion
 
 class IAuthenticationProtocol(object):
     """
-    @summary: generic class for authentication Protocol (ex: ntlmv2, SPNEGO or kerberos)
+    @summary: generic class for authentication Protocol (ex: ntlmv2, SPNEGO or Kerberos)
     """
 
     def getNegotiateMessage(self):
@@ -35,7 +35,7 @@ class IAuthenticationProtocol(object):
         @return: {object} first handshake message
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "getNegotiateMessage", "IAuthenticationProtocol"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'getNegotiateMessage', u'IAuthenticationProtocol'))
 
     def getAuthenticateMessage(self, s):
         """
@@ -44,7 +44,7 @@ class IAuthenticationProtocol(object):
         @return: {(object, IGenericSecurityService)} Last handshake message and interface for application
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "getAuthenticateMessage", "IAuthenticationProtocol"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'getAuthenticateMessage', u'IAuthenticationProtocol'))
 
     def getEncodedCredentials(self):
         """
@@ -52,7 +52,7 @@ class IAuthenticationProtocol(object):
         @return: (domain, username, password)
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "getEncodedCredentials", "IAuthenticationProtocol"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'getEncodedCredentials', u'IAuthenticationProtocol'))
 
 
 class IGenericSecurityService(object):
@@ -67,7 +67,7 @@ class IGenericSecurityService(object):
         @param data: {str}
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "GSS_WrapEx", "IGenericSecurityService"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'GSS_WrapEx', u'IGenericSecurityService'))
 
     def GSS_UnWrapEx(self, data):
         """
@@ -75,4 +75,4 @@ class IGenericSecurityService(object):
         @param data: {str}
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "GSS_UnWrapEx", "IGenericSecurityService"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'GSS_UnWrapEx', u'IGenericSecurityService'))

@@ -19,13 +19,12 @@
 #
 from __future__ import absolute_import, division, print_function
 from rdpy.core.error import InvalidExpectedDataException
-import rdpy.core.log as log
+from rdpy.core import log
 
 """
 Definition of structure use for capabilities nego
 Use in PDU layer
 """
-
 from rdpy.core.type import CompositeType, CallableValue, String, UInt8, UInt16Le, UInt32Le, sizeof, ArrayType, \
     FactoryType
 
@@ -262,19 +261,20 @@ class Capability(CompositeType):
                       BitmapCache2Capability, PointerCapability, InputCapability, BrushCapability, GlyphCapability,
                       OffscreenBitmapCacheCapability, VirtualChannelCapability, SoundCapability, ControlCapability,
                       WindowActivationCapability, FontCapability, ColorCacheCapability, ShareCapability,
-                      RemoteProgramsCapability, DesktopCompositionCapability, MultiFragmentUpdate,
+                      RemoteProgramsCapability, WindowListCapability, DesktopCompositionCapability,
+                      MultiFragmentUpdate,
                       SurfaceCommandsCapability, LargePointerCapability, BitmapCodecsCapability,
                       FrameAcknowledgeCapability]:
                 if self.capabilitySetType.value == c._TYPE_ and (self.lengthCapability.value - 4) > 0:
                     return c(readLen=self.lengthCapability - 4)
-            log.debug("unknown Capability type : %s" % hex(self.capabilitySetType.value))
+            log.debug(u'unknown Capability type : %s' % hex(self.capabilitySetType.value))
             #read entire packet
             return String(readLen=self.lengthCapability - 4)
 
         if capability is None:
             capability = FactoryType(CapabilityFactory)
-        elif not "_TYPE_" in capability.__class__.__dict__:
-            raise InvalidExpectedDataException("Try to send an invalid capability block")
+        elif not u'_TYPE_' in capability.__class__.__dict__:
+            raise InvalidExpectedDataException(u'Try to send an invalid capability block')
 
         self.capability = capability
 
@@ -340,7 +340,7 @@ class OrderCapability(CompositeType):
 
     def __init__(self, readLen=None):
         CompositeType.__init__(self, readLen=readLen)
-        self.terminalDescriptor = String(b"\x00" * 16, readLen=CallableValue(16))
+        self.terminalDescriptor = String(b'\x00' * 16, readLen=CallableValue(16))
         self.pad4octetsA = UInt32Le(0)
         self.desktopSaveXGranularity = UInt16Le(1)
         self.desktopSaveYGranularity = UInt16Le(20)
@@ -403,7 +403,7 @@ class BitmapCache2Capability(CompositeType):
         self.bitmapCache2CellInfo = UInt32Le(0)
         self.bitmapCache3CellInfo = UInt32Le(0)
         self.bitmapCache4CellInfo = UInt32Le(0)
-        self.pad3 = String(b"\x00" * 12, readLen=CallableValue(12))
+        self.pad3 = String(b'\x00' * 12, readLen=CallableValue(12))
 
 
 class PointerCapability(CompositeType):
@@ -446,7 +446,7 @@ class InputCapability(CompositeType):
         #same value as gcc.ClientCoreSettings.keyboardFnKeys
         self.keyboardFunctionKey = UInt32Le()
         #same value as gcc.ClientCoreSettingrrs.imeFileName
-        self.imeFileName = String(b"\x00" * 64, readLen=CallableValue(64))
+        self.imeFileName = String(b'\x00' * 64, readLen=CallableValue(64))
 
 
 class BrushCapability(CompositeType):
@@ -619,6 +619,24 @@ class RemoteProgramsCapability(CompositeType):
         self.railSupportLevel = UInt32Le(0)
 
 
+class WindowListCapability(CompositeType):
+    """
+    @summary: Window List capability (RemoteApp windows, MS-RDPERP 2.2.1.1.2)
+    client -> server, server -> client
+    """
+    _TYPE_ = CapsType.CAPSTYPE_WINDOW
+
+    TS_WINDOW_LEVEL_NOT_SUPPORTED = 0x00000000
+    TS_WINDOW_LEVEL_SUPPORTED = 0x00000001
+    TS_WINDOW_LEVEL_SUPPORTED_EX = 0x00000002
+
+    def __init__(self, readLen=None):
+        CompositeType.__init__(self, readLen=readLen)
+        self.wndSupportLevel = UInt32Le(0)
+        self.numIconCaches = UInt8(3)
+        self.numIconCacheEntries = UInt16Le(12)
+
+
 class DesktopCompositionCapability(CompositeType):
     """
     @summary: Desktop Composition capability
@@ -694,7 +712,7 @@ class BitmapCodecsCapability(CompositeType):
     def __init__(self, readLen=None):
         CompositeType.__init__(self, readLen=readLen)
         self.bitmapCodecCount = UInt8(0)
-        self.bitmapCodecArray = String(b"", readLen=CallableValue(
+        self.bitmapCodecArray = String(b'', readLen=CallableValue(
             lambda: (readLen.value - 1 if readLen is not None and readLen.value > 1 else 0)))
 
     @staticmethod
@@ -709,14 +727,14 @@ class BitmapCodecsCapability(CompositeType):
         commands path.  Advertising only NSCodec (codecID=1) keeps the
         mapping unambiguous and lets the server send readable bitmaps.
         """
-        import struct
+        from struct import pack
         cap = BitmapCodecsCapability()
         cap.bitmapCodecCount.value = 1
         # NSCodec entry
         nscodec = BitmapCodecsCapability.NSCODEC_GUID
-        nscodec += struct.pack('<B', 1)  # codecID (client chooses 1 for NSCodec)
-        nscodec_props = struct.pack('<BBB', 1, 1, 3)  # dynamicFidelity=1, subsampling=1, colorLossLevel=3
-        nscodec += struct.pack('<H', len(nscodec_props))  # codecPropertiesLength
+        nscodec += pack('<B', 1)  # codecID (client chooses 1 for NSCodec)
+        nscodec_props = pack('<BBB', 1, 1, 3)  # dynamicFidelity=1, subsampling=1, colorLossLevel=3
+        nscodec += pack('<H', len(nscodec_props))  # codecPropertiesLength
         nscodec += nscodec_props
         cap.bitmapCodecArray = String(nscodec)
         return cap

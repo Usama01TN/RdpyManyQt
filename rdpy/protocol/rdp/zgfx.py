@@ -4,7 +4,7 @@ ZGFX (RDP 8.0 Bulk Compression) decompressor.
 Based on FreeRDP's zgfx.c implementation (MS-RDPEGFX 3.3.8.2).
 """
 from __future__ import absolute_import, division, print_function
-import rdpy.core.log as log
+from rdpy.core import log
 
 ZGFX_HISTORY_SIZE = 2500000
 PACKET_COMPRESSED = 0x20
@@ -141,7 +141,7 @@ class ZgfxDecompressor(object):
             peek = (bits_current >> (n_bits_current - max_prefix)) & 0x1FF
             entry = huff_lookup[peek]
             if entry is None:
-                log.warning("ZGFX: no token matched at input_pos=%d outLen=%d" % (input_pos, len(out)))
+                log.warning(u'ZGFX: no token matched at input_pos=%d outLen=%d' % (input_pos, len(out)))
                 break
             plen, vbits, ttype, vbase = entry
             bits_remaining -= plen
@@ -184,7 +184,7 @@ class ZgfxDecompressor(object):
                     distance = vbase
                 if distance != 0:
                     if distance < 0 or distance > hist_size:
-                        log.warning("ZGFX: invalid distance %d (hist_size=%d)" % (distance, hist_size))
+                        log.warning(u'ZGFX: invalid distance %d (hist_size=%d)' % (distance, hist_size))
                         break
                     # Decode match length
                     if bits_remaining < 1:

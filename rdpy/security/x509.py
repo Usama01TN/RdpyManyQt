@@ -44,10 +44,16 @@ class DirectoryString(univ.Choice):
     )
 
 
-class AttributeValue(DirectoryString): pass
+class AttributeValue(DirectoryString):
+    """
+    AttributeValue class.
+    """
 
 
-class AttributeType(univ.ObjectIdentifier): pass
+class AttributeType(univ.ObjectIdentifier):
+    """
+    AttributeType class.
+    """
 
 
 class AttributeTypeAndValue(univ.Sequence):
@@ -100,7 +106,10 @@ class SubjectPublicKeyInfo(univ.Sequence):
     )
 
 
-class UniqueIdentifier(univ.BitString): pass
+class UniqueIdentifier(univ.BitString):
+    """
+    UniqueIdentifier class.
+    """
 
 
 class Time(univ.Choice):
@@ -117,7 +126,10 @@ class Validity(univ.Sequence):
     )
 
 
-class CertificateSerialNumber(univ.Integer): pass
+class CertificateSerialNumber(univ.Integer):
+    """
+    CertificateSerialNumber class.
+    """
 
 
 class Version(univ.Integer):
@@ -180,7 +192,7 @@ def extractRSAKey(certificate):
     #https://www.alvestrand.no/objectid/1.2.840.113549.1.1.1.html
     binaryTuple = certificate.getComponentByName('tbsCertificate').getComponentByName(
         'subjectPublicKeyInfo').getComponentByName('subjectPublicKey')
-    return extractRSAKeyFromASN1(unhexlify(hex(int("".join([str(i) for i in binaryTuple]), 2))[2:]))
+    return extractRSAKeyFromASN1(unhexlify(hex(int(u''.join([str(i) for i in binaryTuple]), 2))[2:]))
 
 
 def extractRSAKeyFromASN1(subjectPublicKey):

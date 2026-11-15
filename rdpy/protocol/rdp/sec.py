@@ -22,20 +22,20 @@
 RDP Standard security layer
 """
 from __future__ import absolute_import, division, print_function
+from cryptography.hazmat.primitives.ciphers import Cipher
 from hashlib import sha1, md5
-from . import lic, tpkt
 from .t125 import gcc, mcs
-from rdpy.core.type import CompositeType, CallableValue, Stream, UInt32Le, UInt16Le, String, sizeof, UInt8
+from . import lic, tpkt
+from rdpy.core.type import CompositeType, CallableValue, Stream, UInt32Le, UInt16Le, String, sizeof
+from rdpy.security.rsa_wrapper import random, encrypt, int2bytes, newkeys, decrypt
 from rdpy.core.layer import LayerAutomata, IStreamSender
 from rdpy.core.error import InvalidExpectedDataException
 from rdpy.core import log
-from cryptography.hazmat.primitives.ciphers import Cipher
 
 try:
     from cryptography.hazmat.decrepit.ciphers.algorithms import ARC4
-except ImportError:
+except:
     from cryptography.hazmat.primitives.ciphers.algorithms import ARC4
-import rdpy.security.rsa_wrapper as rsa
 
 
 class SecurityFlag(object):
@@ -83,6 +83,7 @@ class InfoFlag(object):
     INFO_USING_SAVED_CREDS = 0x00100000
     INFO_AUDIOCAPTURE = 0x00200000
     INFO_VIDEO_DISABLE = 0x00400000
+    INFO_HIDEF_RAIL_SUPPORTED = 0x02000000
     INFO_CompressionTypeMask = 0x00001E00
 
 
@@ -120,16 +121,13 @@ def saltedHash(inputData, salt, salt1, salt2):
     """
     sha1Digest = sha1()
     md5Digest = md5()
-
     sha1Digest.update(inputData)
     sha1Digest.update(salt[:48])
     sha1Digest.update(salt1)
     sha1Digest.update(salt2)
     sha1Sig = sha1Digest.digest()
-
     md5Digest.update(salt[:48])
     md5Digest.update(sha1Sig)
-
     return md5Digest.digest()
 
 
@@ -156,10 +154,8 @@ def masterSecret(secret, random1, random2):
     @param serverRandom : {str} server random
     @see: https://msdn.microsoft.com/en-us/library/cc241992.aspx
     """
-    return saltedHash(b"A", secret, random1, random2) + saltedHash(b"BB", secret, random1, random2) + saltedHash(b"CCC",
-                                                                                                                 secret,
-                                                                                                                 random1,
-                                                                                                                 random2)
+    return saltedHash(b'A', secret, random1, random2) + saltedHash(b'BB', secret, random1, random2) + saltedHash(
+        b'CCC', secret, random1, random2)
 
 
 def sessionKeyBlob(secret, random1, random2):
@@ -169,10 +165,8 @@ def sessionKeyBlob(secret, random1, random2):
     @param clientRandom : client random
     @param serverRandom : server random
     """
-    return saltedHash(b"X", secret, random1, random2) + saltedHash(b"YY", secret, random1, random2) + saltedHash(b"ZZZ",
-                                                                                                                 secret,
-                                                                                                                 random1,
-                                                                                                                 random2)
+    return saltedHash(b'X', secret, random1, random2) + saltedHash(
+        b'YY', secret, random1, random2) + saltedHash(b'ZZZ', secret, random1, random2)
 
 
 def macData(macSaltKey, data):
@@ -190,14 +184,14 @@ def macData(macSaltKey, data):
     dataLength.writeType(UInt32Le(len(data)))
 
     sha1Digest.update(macSaltKey)
-    sha1Digest.update(b"\x36" * 40)
+    sha1Digest.update(b'\x36' * 40)
     sha1Digest.update(dataLength.getvalue())
     sha1Digest.update(data)
 
     sha1Sig = sha1Digest.digest()
 
     md5Digest.update(macSaltKey)
-    md5Digest.update(b"\x5c" * 48)
+    md5Digest.update(b'\x5c' * 48)
     md5Digest.update(sha1Sig)
 
     return md5Digest.digest()
@@ -222,7 +216,7 @@ def macSaltedData(macSaltKey, data, encryptionCount):
     encryptionCountS.writeType(UInt32Le(encryptionCount))
 
     sha1Digest.update(macSaltKey)
-    sha1Digest.update(b"\x36" * 40)
+    sha1Digest.update(b'\x36' * 40)
     sha1Digest.update(dataLengthS.getvalue())
     sha1Digest.update(data)
     sha1Digest.update(encryptionCountS.getvalue())
@@ -230,7 +224,7 @@ def macSaltedData(macSaltKey, data, encryptionCount):
     sha1Sig = sha1Digest.digest()
 
     md5Digest.update(macSaltKey)
-    md5Digest.update(b"\x5c" * 48)
+    md5Digest.update(b'\x5c' * 48)
     md5Digest.update(sha1Sig)
 
     return md5Digest.digest()
@@ -245,17 +239,13 @@ def tempKey(initialKey, currentKey):
     """
     sha1Digest = sha1()
     md5Digest = md5()
-
     sha1Digest.update(initialKey)
-    sha1Digest.update(b"\x36" * 40)
+    sha1Digest.update(b'\x36' * 40)
     sha1Digest.update(currentKey)
-
     sha1Sig = sha1Digest.digest()
-
     md5Digest.update(initialKey)
-    md5Digest.update(b"\x5c" * 48)
+    md5Digest.update(b'\x5c' * 48)
     md5Digest.update(sha1Sig)
-
     return md5Digest.digest()
 
 
@@ -266,7 +256,7 @@ def gen40bits(data):
     @return: {str} 40 bits data
     @see: https://msdn.microsoft.com/en-us/library/cc240785.aspx
     """
-    return b"\xd1\x26\x9e" + data[:8][-5:]
+    return b'\xd1\x26\x9e' + data[:8][-5:]
 
 
 def gen56bits(data):
@@ -276,7 +266,7 @@ def gen56bits(data):
     @return: {str} 56 bits data
     @see: https://msdn.microsoft.com/en-us/library/cc240785.aspx
     """
-    return b"\xd1" + data[:8][-7:]
+    return b'\xd1' + data[:8][-7:]
 
 
 def generateKeys(clientRandom, serverRandom, method):
@@ -306,7 +296,7 @@ def generateKeys(clientRandom, serverRandom, method):
     elif method == gcc.EncryptionMethod.ENCRYPTION_FLAG_128BIT:
         return macKey128, initialFirstKey128, initialSecondKey128
 
-    raise InvalidExpectedDataException("Bad encryption method")
+    raise InvalidExpectedDataException(u'Bad encryption method')
 
 
 def updateKey(initialKey, currentKey, method):
@@ -341,12 +331,12 @@ class ClientSecurityExchangePDU(CompositeType):
         CompositeType.__init__(self)
         self.length = UInt32Le(lambda: (sizeof(self) - 4))
         self.encryptedClientRandom = String(readLen=CallableValue(lambda: (self.length.value - 8)))
-        self.padding = String(b"\x00" * 8, readLen=CallableValue(8))
+        self.padding = String(b'\x00' * 8, readLen=CallableValue(8))
 
 
 class RDPInfo(CompositeType):
     """
-    @summary: Client informations
+    @summary: Client information
     Contains credentials (very important packet)
     @see: https://msdn.microsoft.com/en-us/library/cc240475.aspx
     """
@@ -387,7 +377,7 @@ class RDPExtendedInfo(CompositeType):
         self.cbClientDir = UInt16Le(lambda: sizeof(self.clientDir))
         self.clientDir = String(readLen=self.cbClientDir, unicode=True)
         #TODO make tiomezone
-        self.clientTimeZone = String(b"\x00" * 172)
+        self.clientTimeZone = String(b'\x00' * 172)
         self.clientSessionId = UInt32Le()
         self.performanceFlags = UInt32Le(
             PerfFlag.PERF_DISABLE_FULLWINDOWDRAG | PerfFlag.PERF_DISABLE_MENUANIMATIONS | PerfFlag.PERF_ENABLE_FONT_SMOOTHING | PerfFlag.PERF_ENABLE_DESKTOP_COMPOSITION)
@@ -442,7 +432,7 @@ class SecLayer(LayerAutomata, IStreamSender, tpkt.IFastPathListener, tpkt.IFastP
         """
         #if update is needed
         if self._nbDecryptedPacket == 4096:
-            log.debug("update decrypt key")
+            log.debug(u'update decrypt key')
             self._currentDecrytKey = updateKey(self._initialDecrytKey, self._currentDecrytKey,
                                                self.getGCCServerSettings().SC_SECURITY.encryptionMethod.value)
             self._decryptRc4 = Cipher(ARC4(self._currentDecrytKey), mode=None).encryptor()
@@ -455,11 +445,11 @@ class SecLayer(LayerAutomata, IStreamSender, tpkt.IFastPathListener, tpkt.IFastP
 
         #ckeck signature
         if not saltedMacGeneration and macData(self._macKey, decrypted)[:8] != signature.value:
-            raise InvalidExpectedDataException("bad signature")
+            raise InvalidExpectedDataException(u'bad signature')
 
         if saltedMacGeneration and macSaltedData(self._macKey, decrypted, self._nbDecryptedPacket)[
             :8] != signature.value:
-            raise InvalidExpectedDataException("bad signature")
+            raise InvalidExpectedDataException(u'bad signature')
 
         #count
         self._nbDecryptedPacket += 1
@@ -474,7 +464,7 @@ class SecLayer(LayerAutomata, IStreamSender, tpkt.IFastPathListener, tpkt.IFastP
         @return: {Tuple} (signature, encryptedData)
         """
         if self._nbEncryptedPacket == 4096:
-            log.debug("update encrypt key")
+            log.debug(u'update encrypt key')
             self._currentEncryptKey = updateKey(self._initialEncryptKey, self._currentEncryptKey,
                                                 self.getGCCServerSettings().SC_SECURITY.encryptionMethod.value)
             self._encryptRc4 = Cipher(ARC4(self._currentEncryptKey), mode=None).encryptor()
@@ -647,10 +637,10 @@ class Client(SecLayer):
         @summary: generate and send client random and init session keys 
         """
         #generate client random
-        clientRandom = rsa.random(256)
-        self._macKey, self._initialDecrytKey, self._initialEncryptKey = generateKeys(clientRandom,
-                                                                                     self.getGCCServerSettings().SC_SECURITY.serverRandom.value,
-                                                                                     self.getGCCServerSettings().SC_SECURITY.encryptionMethod.value)
+        clientRandom = random(256)
+        self._macKey, self._initialDecrytKey, self._initialEncryptKey = generateKeys(
+            clientRandom, self.getGCCServerSettings().SC_SECURITY.serverRandom.value,
+            self.getGCCServerSettings().SC_SECURITY.encryptionMethod.value)
         #initialize keys
         self._currentDecrytKey = self._initialDecrytKey
         self._currentEncryptKey = self._initialEncryptKey
@@ -659,12 +649,12 @@ class Client(SecLayer):
 
         #verify certificate
         if not self.getGCCServerSettings().SC_SECURITY.serverCertificate.certData.verify():
-            log.warning("cannot verify server identity")
+            log.warning(u'cannot verify server identity')
         #send client random encrypted with
         serverPublicKey = self.getGCCServerSettings().SC_SECURITY.serverCertificate.certData.getPublicKey()
         message = ClientSecurityExchangePDU()
         #reverse because bignum in little endian
-        message.encryptedClientRandom.value = rsa.encrypt(clientRandom[::-1], serverPublicKey)[::-1]
+        message.encryptedClientRandom.value = encrypt(clientRandom[::-1], serverPublicKey)[::-1]
         self.sendFlagged(SecurityFlag.SEC_EXCHANGE_PKT, message)
 
     def recvLicenceInfo(self, s):
@@ -701,7 +691,7 @@ class Client(SecLayer):
         s.readType((securityFlag, securityFlagHi))
 
         if not (securityFlag.value & SecurityFlag.SEC_LICENSE_PKT):
-            raise InvalidExpectedDataException("waiting license packet")
+            raise InvalidExpectedDataException(u'waiting license packet')
 
         if self._licenceManager.recv(s):
             self.setNextState()
@@ -719,7 +709,7 @@ class Server(SecLayer):
         @param presentation: {Layer}
         """
         SecLayer.__init__(self, presentation)
-        self._rsaPublicKey, self._rsaPrivateKey = rsa.newkeys(512)
+        self._rsaPublicKey, self._rsaPrivateKey = newkeys(512)
 
     def connect(self):
         """
@@ -736,7 +726,7 @@ class Server(SecLayer):
         @summary: generate proprietary certificate from rsa public key
         """
         certificate = gcc.ProprietaryServerCertificate()
-        certificate.PublicKeyBlob.modulus.value = rsa.int2bytes(self._rsaPublicKey.n)[::-1]
+        certificate.PublicKeyBlob.modulus.value = int2bytes(self._rsaPublicKey.n)[::-1]
         certificate.PublicKeyBlob.pubExp.value = self._rsaPublicKey.e
         certificate.sign()
         return gcc.ServerCertificate(certificate)
@@ -750,17 +740,14 @@ class Server(SecLayer):
         securityFlag = UInt16Le()
         securityFlagHi = UInt16Le()
         s.readType((securityFlag, securityFlagHi))
-
         if not (securityFlag.value & SecurityFlag.SEC_EXCHANGE_PKT):
-            raise InvalidExpectedDataException("waiting client random")
-
+            raise InvalidExpectedDataException(u'waiting client random')
         message = ClientSecurityExchangePDU()
         s.readType(message)
-        clientRandom = rsa.decrypt(message.encryptedClientRandom.value[::-1], self._rsaPrivateKey)[::-1]
-
-        self._macKey, self._initialEncryptKey, self._initialDecrytKey = generateKeys(clientRandom,
-                                                                                     self.getGCCServerSettings().SC_SECURITY.serverRandom.value,
-                                                                                     self.getGCCServerSettings().SC_SECURITY.encryptionMethod.value)
+        clientRandom = decrypt(message.encryptedClientRandom.value[::-1], self._rsaPrivateKey)[::-1]
+        self._macKey, self._initialEncryptKey, self._initialDecrytKey = generateKeys(
+            clientRandom, self.getGCCServerSettings().SC_SECURITY.serverRandom.value,
+            self.getGCCServerSettings().SC_SECURITY.encryptionMethod.value)
         #initialize keys
         self._currentDecrytKey = self._initialDecrytKey
         self._currentEncryptKey = self._initialEncryptKey
@@ -787,7 +774,7 @@ class Server(SecLayer):
         s.readType((securityFlag, securityFlagHi))
 
         if not (securityFlag.value & SecurityFlag.SEC_INFO_PKT):
-            raise InvalidExpectedDataException("Waiting info packet")
+            raise InvalidExpectedDataException(u'Waiting info packet')
 
         if securityFlag.value & SecurityFlag.SEC_ENCRYPT:
             s = self.readEncryptedPayload(s, securityFlag.value & SecurityFlag.SEC_SECURE_CHECKSUM)

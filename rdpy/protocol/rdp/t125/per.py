@@ -17,14 +17,12 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 Per encoded function
 """
 from __future__ import absolute_import, division, print_function
-
-from rdpy.core.type import UInt8, UInt16Be, UInt32Be, String
 from rdpy.core.error import InvalidValue, InvalidExpectedDataException
+from rdpy.core.type import UInt8, UInt16Be, UInt32Be, String
 
 
 def readLength(s):
@@ -140,7 +138,7 @@ def readInteger(s):
         s.readType(result)
         return result.value
     else:
-        raise InvalidValue("invalid integer size %d" % size)
+        raise InvalidValue(u'invalid integer size %d' % size)
 
 
 def writeInteger(value):
@@ -186,11 +184,11 @@ def readObjectIdentifier(s, oid):
     """
     size = readLength(s)
     if size != 5:
-        raise InvalidValue("size of stream oid is wrong %d != 5" % size)
+        raise InvalidValue(u'size of stream oid is wrong %d != 5' % size)
     data = s.read(5)
     a_oid = [data[0] >> 4, data[0] & 0x0f, data[1], data[2], data[3], data[4]]
     if list(oid) != a_oid:
-        raise InvalidExpectedDataException("invalid object identifier")
+        raise InvalidExpectedDataException(u'invalid object identifier')
 
 
 def writeObjectIdentifier(oid):
@@ -253,7 +251,7 @@ def writePadding(length):
     @param length: length of padding
     @return: String with \x00 * length
     """
-    return String(b"\x00" * length)
+    return String(b'\x00' * length)
 
 
 def readOctetStream(s, octetStream, minValue=0):
@@ -266,7 +264,7 @@ def readOctetStream(s, octetStream, minValue=0):
     """
     size = readLength(s) + minValue
     if size != len(octetStream):
-        raise InvalidValue("incompatible size %d != %d" % (len(octetStream), size))
+        raise InvalidValue(u'incompatible size %d != %d' % (len(octetStream), size))
     data = s.read(size)
     expected = octetStream if isinstance(octetStream, bytes) else bytes(octetStream)
     return data == expected

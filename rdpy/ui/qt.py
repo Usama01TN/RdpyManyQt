@@ -23,18 +23,18 @@ Qt specific code
 QRemoteDesktop is a widget use for render in rdpy
 """
 from __future__ import absolute_import, division, print_function
-from ManyQt.QtCore import Qt, QObject, QTimer, pyqtSignal, QRectF, QMimeData, QUrl, QRect, pyqtSlot, QEventLoop
+from ManyQt.QtCore import Qt, QObject, QTimer, pyqtSignal, QRectF, QMimeData, QUrl, QRect, pyqtSlot, QEventLoop, QEvent
 from ManyQt.QtWidgets import QMessageBox, QMenu, QApplication, QWidget, QFileDialog
 from ManyQt.QtGui import QCursor, QPixmap, QImage, QPainter, QColor, QRegion
 from rdpy.protocol.rdp.rdp import RDPClientObserver
 from rdpy.core.error import CallPureVirtualFuntion
-import rdpy.core.log as log
-from rdpy.core import rle
+from rdpy.core import log, rle
+from numpy import any as np_any, ascontiguousarray, concatenate, empty, frombuffer, ndarray, pad, uint8, unpackbits, \
+    where, zeros
+from sys import stderr, stdout, platform
 from twisted.internet import reactor
-import collections
-import numpy as np
-import traceback
-import sys
+from traceback import format_stack
+from collections import deque
 
 # Scan code swap table for --swap-alt-meta: swaps Alt keys with Meta (Windows) keys.
 _ALT_META_SWAP = {
@@ -57,7 +57,8 @@ class QAdaptor(object):
         @param e: QMouseEvent
         @param isPressed: event come from press or release action
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "sendMouseEvent", "QAdaptor"))
+        raise CallPureVirtualFuntion(
+            u'%s:%s defined by interface %s' % (self.__class__, u'sendMouseEvent', u'QAdaptor'))
 
     def sendKeyEvent(self, e, isPressed):
         """
@@ -65,14 +66,15 @@ class QAdaptor(object):
         @param e: QEvent
         @param isPressed: event come from press or release action
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "sendKeyEvent", "QAdaptor"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'sendKeyEvent', u'QAdaptor'))
 
     def sendWheelEvent(self, e):
         """
         @summary: Interface to send wheel event to protocol stack
         @param e: QWheelEvent
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "sendWheelEvent", "QAdaptor"))
+        raise CallPureVirtualFuntion(
+            u'%s:%s defined by interface %s' % (self.__class__, u'sendWheelEvent', u'QAdaptor'))
 
     def sendMouseMoveCoords(self, x, y):
         """
@@ -81,14 +83,14 @@ class QAdaptor(object):
         @param y: y position
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "sendMouseMoveCoords", "QAdaptor"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'sendMouseMoveCoords', u'QAdaptor'))
 
     def closeEvent(self, e):
         """
         @summary: Call when you want to close connection
         @param: QCloseEvent
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "closeEvent", "QAdaptor"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'closeEvent', u'QAdaptor'))
 
     def onResizeRequest(self, width, height):
         """
@@ -96,7 +98,8 @@ class QAdaptor(object):
         @param width: {int} new width
         @param height: {int} new height
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "onResizeRequest", "QAdaptor"))
+        raise CallPureVirtualFuntion(
+            u'%s:%s defined by interface %s' % (self.__class__, u'onResizeRequest', u'QAdaptor'))
 
 
 def qtImageFormatFromRFBPixelFormat(pixelFormat):
@@ -115,7 +118,7 @@ def _flip_rows_inplace(buf, width, height, bytes_per_pixel):
     needed = height * stride
     if len(buf) < needed:
         return False
-    arr = np.frombuffer(buf, dtype=np.uint8)[:needed].reshape(height, stride)
+    arr = frombuffer(buf, dtype=uint8)[:needed].reshape(height, stride)
     arr[:] = arr[::-1]
     return True
 
@@ -135,29 +138,25 @@ def _interleavedDecode(data, width, height, bytesPerPixel):
     except interleaved.RleError as e:
         _rleErrors[0] += 1
         if _rleErrors[0] <= 5:
-            log.warning("invalid RLE bitmap %dx%d (%d bytes): %s" % (width, height, len(data), e))
+            log.warning(u'invalid RLE bitmap %dx%d (%d bytes): %s' % (width, height, len(data), e))
         return None
 
 
 def RDPBitmapToQtImage(width, height, bitsPerPixel, isCompress, data):
-    image = None
-
     if width <= 0 or height <= 0:
         return None
-
     # Ensure data is bytes for QImage compatibility
     if hasattr(data, 'encode'):
         data = data.encode('latin-1')
     elif not isinstance(data, (bytes, bytearray)):
         data = bytes(data)
-
     # RDPGFX path: data is already top-down BGRA — no flip needed.
     # Keep a reference to the Python buffer on the QImage so it stays alive
     # until the QImage is garbage collected — avoids the expensive .copy().
     if isCompress == 'gfx' and bitsPerPixel == 32:
         needed = width * height * 4
         if len(data) < needed:
-            log.warning("RDPGFX bitmap truncated: len=%d need=%d" % (len(data), needed))
+            log.warning(u'RDPGFX bitmap truncated: len=%d need=%d' % (len(data), needed))
             return None
         buf = bytes(data[:needed])
         image = QImage(buf, width, height, width * 4, QImage.Format.Format_RGB32)
@@ -186,7 +185,7 @@ def RDPBitmapToQtImage(width, height, bitsPerPixel, isCompress, data):
             image._buffer_ref = buf
         else:
             if len(data) < needed:
-                log.warning("Uncompressed 15bpp bitmap truncated: len=%d need=%d" % (len(data), needed))
+                log.warning(u'Uncompressed 15bpp bitmap truncated: len=%d need=%d' % (len(data), needed))
                 return None
             raw = bytearray(data[:needed])
             if not _flip_rows_inplace(raw, width, height, bpp):
@@ -208,7 +207,7 @@ def RDPBitmapToQtImage(width, height, bitsPerPixel, isCompress, data):
             image._buffer_ref = buf
         else:
             if len(data) < needed:
-                log.warning("Uncompressed 16bpp bitmap truncated: len=%d need=%d" % (len(data), needed))
+                log.warning(u'Uncompressed 16bpp bitmap truncated: len=%d need=%d' % (len(data), needed))
                 return None
             raw = bytearray(data[:needed])
             if not _flip_rows_inplace(raw, width, height, bpp):
@@ -230,7 +229,7 @@ def RDPBitmapToQtImage(width, height, bitsPerPixel, isCompress, data):
             image._buffer_ref = buf
         else:
             if len(data) < needed:
-                log.warning("Uncompressed 24bpp bitmap truncated: len=%d need=%d" % (len(data), needed))
+                log.warning(u'Uncompressed 24bpp bitmap truncated: len=%d need=%d' % (len(data), needed))
                 return None
             raw = bytearray(data[:needed])
             if not _flip_rows_inplace(raw, width, height, bpp):
@@ -256,16 +255,16 @@ def RDPBitmapToQtImage(width, height, bitsPerPixel, isCompress, data):
             image._buffer_ref = buf
         else:
             if len(data) < needed:
-                log.warning("Uncompressed 32bpp bitmap truncated: len=%d need=%d" % (len(data), needed))
+                log.warning(u'Uncompressed 32bpp bitmap truncated: len=%d need=%d' % (len(data), needed))
                 return None
             # Flip rows and set alpha in one numpy pass — avoids the
             # intermediate  b'\xff' * N  allocation from the old slice-assign.
-            arr = np.frombuffer(data[:needed], dtype=np.uint8).reshape(height, width, 4)[::-1].copy()
+            arr = frombuffer(data[:needed], dtype=uint8).reshape(height, width, 4)[::-1].copy()
             arr[:, :, 3] = 0xff
             image = QImage(arr.data, width, height, width * bpp, fmt)
             image._buffer_ref = arr
     else:
-        log.warning("skipping bitmap with unsupported bit depth: %d" % bitsPerPixel)
+        log.warning(u'skipping bitmap with unsupported bit depth: %d' % bitsPerPixel)
         return None
     return image
 
@@ -286,7 +285,7 @@ class _QtInvoker(QObject):
         try:
             fn()
         except Exception as e:
-            log.warning("_QtInvoker: exception in queued call: %s" % e)
+            log.warning(u'_QtInvoker: exception in queued call: %s' % e)
 
     def invoke(self, fn):
         """Thread-safe: post fn() to be executed on the Qt main thread."""
@@ -317,27 +316,28 @@ def closeAllSessions(wait=2.5, app=None):
     from QApplication.aboutToQuit: events are processed while waiting.
     @return: {int} number of sessions that had to be aborted
     """
-    import time
+    from time import sleep, time
     from rdpy.protocol.rdp.rdp import RDPClientController
     sessions = RDPClientController.openSessions()
     if not sessions:
         return 0
-    log.info("closing %d RDP session(s)" % len(sessions))
+    log.info(u'closing %d RDP session(s)' % len(sessions))
     for controller in sessions:
         try:
             controller.close()
         except Exception as e:
-            log.debug("closeAllSessions: %s" % e)
+            log.debug(u'closeAllSessions: %s' % e)
     app = app or QApplication.instance()
-    deadline = time.time() + wait
-    while time.time() < deadline and any(c.isConnected() for c in sessions):
+    deadline = time() + wait
+    while time() < deadline and any(c.isConnected() for c in sessions):
         if app is not None:
             app.processEvents(
-                QEventLoop.ProcessEventsFlag.AllEvents if hasattr(QEventLoop, 'ProcessEventsFlag') else QEventLoop.AllEvents, 50)
-        time.sleep(0.01)
+                QEventLoop.ProcessEventsFlag.AllEvents if hasattr(QEventLoop,
+                                                                  'ProcessEventsFlag') else QEventLoop.AllEvents, 50)
+        sleep(0.01)
     left = [c for c in sessions if c.isConnected()]
     for controller in left:
-        controller.abort("the application is closing")
+        controller.abort(u'the application is closing')
     if app is not None:
         app.processEvents()
     return len(left)
@@ -373,7 +373,7 @@ def forceExit(code=0):
     leftover thread, no late log line. Flushes the output, removes the
     clipboard download folders, then exits immediately.
     """
-    import os
+    from os import _exit
     global _quitting
     _quitting = True
     try:
@@ -381,16 +381,16 @@ def forceExit(code=0):
     except Exception:
         pass
     try:
-        from rdpy.protocol.rdp import cliprdr_file
+        from rdpy.protocol.rdp.channels import cliprdr_file
         cliprdr_file._cleanup()
     except Exception:
         pass
-    for stream in (sys.stdout, sys.stderr):
+    for stream in (stdout, stderr):
         try:
             stream.flush()
         except Exception:
             pass
-    os._exit(int(code or 0))
+    _exit(int(code or 0))
 
 
 def installQuitGuard(app):
@@ -435,7 +435,7 @@ def installCleanExit(app):
     import signal
 
     def onSignal(signum, frame):
-        log.info("signal %d: closing the RDP session(s)" % signum)
+        log.info(u'signal %d: closing the RDP session(s)' % signum)
         QTimer.singleShot(0, lambda: requestQuit(app, 128 + signum))
 
     for name in ('SIGINT', 'SIGTERM', 'SIGHUP', 'SIGBREAK'):
@@ -453,8 +453,84 @@ def installCleanExit(app):
 def _get_qt_invoker():
     global _qt_invoker
     if _qt_invoker is None:
-        _qt_invoker = _QtInvoker()
+        invoker = _QtInvoker()
+        app = QApplication.instance()
+        if app is not None and invoker.thread() is not app.thread():
+            # created from a worker thread (camera, WebAuthn PIN...): its queued calls must
+            # still run in the GUI thread
+            invoker.moveToThread(app.thread())
+        _qt_invoker = invoker
     return _qt_invoker
+
+
+def askSecurityKeyPin(prompt, parent=None):
+    """
+    @summary: Ask the PIN of a FIDO2 security key (MS-RDPEWA) in a password dialog shown
+    in the GUI thread; may be called from any thread
+    @return: {str|None}
+    """
+    import threading
+    from ManyQt.QtWidgets import QInputDialog, QLineEdit
+    result = {}
+    done = threading.Event()
+
+    def ask():
+        try:
+            mode = QLineEdit.EchoMode.Password if hasattr(QLineEdit, 'EchoMode') else QLineEdit.Password
+            text, ok = QInputDialog.getText(parent, u'Security key', prompt, mode)
+            result['pin'] = text if ok and text else None
+        finally:
+            done.set()
+
+    mainThread = getattr(threading, 'main_thread', None)
+    if mainThread is not None and threading.current_thread() is mainThread():
+        ask()
+    else:
+        _get_qt_invoker().invoke(ask)
+        done.wait()
+    return result.get('pin')
+
+
+_keyNotification = {}
+
+
+def showSecurityKeyNotification(show, message, timeoutMs, cancel=None, parent=None):
+    """
+    @summary: FreeRDP's WebAuthn user notification ("Touch the security key", 30 s): a small
+    non-modal box with a Cancel button that stops the operation; any thread
+    """
+
+    def run():
+        box = _keyNotification.pop('box', None)
+        if box is not None:
+            box.close()
+            box.deleteLater()
+        if not show:
+            return
+        box = QMessageBox(QMessageBox.Icon.Information, u'Security key', message,
+                          QMessageBox.StandardButton.Cancel, parent)
+        box.setModal(False)
+        if cancel is not None:
+            box.rejected.connect(cancel.set)
+            box.buttonClicked.connect(lambda button: cancel.set())
+        box.show()
+        QTimer.singleShot(int(timeoutMs), box.close)
+        _keyNotification['box'] = box
+
+    _get_qt_invoker().invoke(run)
+
+
+def _touchStateName(state):
+    """Name of a Qt touch point state (Qt 5 TouchPointPressed..., Qt 6 QEventPoint.Pressed...)."""
+    name = getattr(state, 'name', None)
+    if not name:
+        for candidate in ('Pressed', 'Released', 'Moved', 'Stationary'):
+            for holder in (Qt, getattr(Qt, 'TouchPointState', None)):
+                value = getattr(holder, 'TouchPoint' + candidate, None) if holder is not None else None
+                if value is not None and int(value) == int(state):
+                    return candidate
+        return 'Moved'
+    return name.replace('TouchPoint', '')
 
 
 class RDPClientQt(RDPClientObserver, QAdaptor):
@@ -482,15 +558,23 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         self._pointerCache = {}
         self._swap_alt_meta = swap_alt_meta
         self._resizeCallback = None
+        self._dynamicResolution = True
+        self._railMode = False
         #set widget screen to RDP stack
         controller.setScreen(width, height)
         controller.setPerformanceSession()
-
+        # RemoteApp windows (MS-RDPERP): idle until the server opens the rail channel
+        self._railManager = None
+        if hasattr(controller, 'getRailLayer'):
+            try:
+                from rdpy.ui.rail_qt import RailManager
+                self._railManager = RailManager(self, self._widget)
+            except Exception as e:
+                log.warning(u'RemoteApp windows unavailable: %r' % (e,))
         # Route QAudioSink operations to the Qt main thread so they are
         # never executed from the Twisted background thread.
         if hasattr(controller, '_rdpsndLayer') and controller._rdpsndLayer is not None:
             controller._rdpsndLayer.setQtInvoker(_get_qt_invoker().invoke)
-
         # Clipboard integration
         self._clipboard = QApplication.clipboard()
         self._clipboardConnected = True
@@ -519,12 +603,12 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
 
     def _onLocalClipboardChanged(self):
         """Notify the RDP server that local clipboard content changed."""
-        log.debug("CLIPRDR DEBUG [Qt]: _onLocalClipboardChanged() fired")
+        log.debug(u'CLIPRDR DEBUG [Qt]: _onLocalClipboardChanged() fired')
         reactor.callFromThread(self._controller.onLocalClipboardChanged)
 
     def _onRemoteClipboardText(self, text):
         """Update the local clipboard with text received from the RDP server."""
-        log.debug("CLIPRDR DEBUG [Qt]: _onRemoteClipboardText() len=%d" % len(text))
+        log.debug(u'CLIPRDR DEBUG [Qt]: _onRemoteClipboardText() len=%d' % len(text))
         mimeData = QMimeData()
         mimeData.setText(text)
         self._clipboard.setMimeData(mimeData)
@@ -545,10 +629,10 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
     def _getLocalClipboardText(self):
         """Return current local clipboard text for sending to the RDP server."""
         mimeData = self._clipboard.mimeData()
-        text = ""
+        text = u''
         if mimeData and mimeData.hasText():
             text = mimeData.text()
-        log.debug("CLIPRDR DEBUG [Qt]: _getLocalClipboardText() -> %d chars" % len(text))
+        log.debug(u'CLIPRDR DEBUG [Qt]: _getLocalClipboardText() -> %d chars' % len(text))
         return text
 
     def sendMouseEvent(self, e, isPressed):
@@ -567,6 +651,23 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
             buttonNumber = 3
         x, y = self._widget.toRemote(e.pos().x(), e.pos().y())
         reactor.callFromThread(self._controller.sendPointerEvent, x, y, buttonNumber, isPressed)
+
+    def sendPointerAt(self, x, y, button, isPressed):
+        """
+        @summary: Mouse button at remote desktop coordinates (RemoteApp windows)
+        @param button: {int} 1 left, 2 right, 3 middle
+        """
+        reactor.callFromThread(self._controller.sendPointerEvent, int(x), int(y), button, isPressed)
+
+    def sendWheelAt(self, x, y, angle):
+        """
+        @summary: Wheel at remote desktop coordinates (RemoteApp windows)
+        @param angle: {QPoint} QWheelEvent.angleDelta()
+        """
+        if angle.y():
+            reactor.callFromThread(self._controller.sendWheelEvent, int(x), int(y), angle.y(), False)
+        if angle.x():
+            reactor.callFromThread(self._controller.sendWheelEvent, int(x), int(y), angle.x(), True)
 
     def sendMouseMoveCoords(self, x, y):
         """
@@ -699,7 +800,7 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         @param e: QKeyEvent
         @param isPressed: event come from press or release action
         """
-        if sys.platform == "darwin":
+        if platform == u'darwin':
             native_code = e.nativeVirtualKey()
             # macOS native key codes (kVK_xxx) differ entirely from RDP
             # scan codes, so use the explicit translation map.  Keys not in
@@ -707,7 +808,7 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
             code = self._MACOS_KEYCODE_MAP.get(native_code)
             if code is None:
                 return
-        elif sys.platform == "linux":
+        elif platform == u'linux':
             # X11/XKB native scan codes are 8 higher than RDP scan codes.
             code = e.nativeScanCode() - 8
         else:
@@ -718,8 +819,98 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         # upper byte is 0xE0 are sent with KBDFLAGS_EXTENDED set.
         extended = (code >> 8 == 0xE0)
         if extended:
-            code = code & 0xFF
+            code &= 0xFF
         reactor.callFromThread(self._controller.sendKeyEventScancode, code, isPressed, extended)
+
+    def onVideoFrame(self, x, y, width, height, bgra):
+        """
+        @summary: MS-RDPEVOR video frame (already scaled to the presentation size) drawn
+        over the desktop like FreeRDP gdiVideoShowSurface (clipped to the desktop)
+        """
+        rw, rh = self._widget.remoteSize()
+        w = min(width, rw - x)
+        h = min(height, rh - y)
+        if w <= 0 or h <= 0:
+            return
+        data = bgra[:h, :w].copy()
+        image = QImage(data.data, w, h, w * 4, QImage.Format.Format_RGB32)
+        image._buffer_ref = data
+        self._widget.notifyBatch([(x, y, image, w, h)])
+
+    def onTsmfFrame(self, x, y, width, height, bgra, visibleRects):
+        """
+        @summary: TSMF (MS-RDPEV) video frame: scaled to the player's video rectangle and drawn
+        in its visible rectangles only (FreeRDP xf_tsmf); any thread
+        """
+        if width <= 0 or height <= 0:
+            return
+        h0, w0 = bgra.shape[:2]
+        data = bgra.copy()
+        image = QImage(data.data, w0, h0, w0 * 4, QImage.Format.Format_RGB32)
+        image._buffer_ref = data
+        if (w0, h0) != (width, height):
+            image = image.scaled(width, height, Qt.AspectRatioMode.IgnoreAspectRatio,
+                                 Qt.TransformationMode.SmoothTransformation)
+        rw, rh = self._widget.remoteSize()
+        parts = []
+        for rx, ry, rwid, rhei in (visibleRects or [(0, 0, width, height)]):
+            cx, cy = max(0, rx), max(0, ry)
+            cw = min(width, rx + rwid) - cx
+            ch = min(height, ry + rhei) - cy
+            cw = min(cw, rw - (x + cx))
+            ch = min(ch, rh - (y + cy))
+            if cw > 0 and ch > 0 and x + cx >= 0 and y + cy >= 0:
+                parts.append((x + cx, y + cy, image.copy(cx, cy, cw, ch), cw, ch))
+        if parts:
+            self._widget.notifyBatch(parts)
+
+    def sendTouchEvent(self, e):
+        """
+        @summary: Qt touch event -> MS-RDPEI touch frame (FreeRDP xf_input touch handling)
+        @return: {bool} sent (False: no rdpei channel, Qt then makes mouse events)
+        """
+        rdpei = getattr(self._controller, '_rdpei', None)
+        if rdpei is None or not rdpei.isActive():
+            return False
+        points = []
+        cancel = e.type() == QEvent.Type.TouchCancel
+        for p in (e.points() if hasattr(e, 'points') else e.touchPoints()):
+            pos = p.position() if hasattr(p, 'position') else p.pos()
+            x, y = self._widget.toRemote(pos.x(), pos.y())
+            name = _touchStateName(p.state())
+            state = 'cancel' if cancel else {'Pressed': 'begin', 'Released': 'end'}.get(name, 'update')
+            points.append((int(p.id()), state, x, y))
+        reactor.callFromThread(self._controller.sendTouch, points)
+        return True
+
+    def sendTabletEvent(self, e):
+        """
+        @summary: Qt tablet (pen) event -> MS-RDPEI pen frame (protocol 2.0 and later)
+        @return: {bool} sent (False: Qt then makes mouse events)
+        """
+        rdpei = getattr(self._controller, '_rdpei', None)
+        if rdpei is None or not rdpei.penSupported():
+            return False
+        T = QEvent.Type
+        kind = e.type()
+        buttons = int(getattr(e.buttons(), 'value', e.buttons()))
+        if kind == T.TabletPress:
+            state = 'begin'
+        elif kind == T.TabletRelease:
+            state = 'end'
+        elif buttons:
+            state = 'update'
+        else:
+            state = 'hover'
+        pos = e.position() if hasattr(e, 'position') else e.posF()
+        x, y = self._widget.toRemote(pos.x(), pos.y())
+        pointer = getattr(e, 'pointerType', lambda: None)()
+        eraser = 'Eraser' in str(pointer)
+        barrel = bool(buttons & int(getattr(Qt.MouseButton.RightButton, 'value', Qt.MouseButton.RightButton)))
+        reactor.callFromThread(self._controller.sendPen, state, x, y, pressure=e.pressure(),
+                               rotation=int(e.rotation()) % 360, tiltX=e.xTilt(), tiltY=e.yTilt(),
+                               eraser=eraser, barrel=barrel)
+        return True
 
     def sendWheelEvent(self, e):
         """
@@ -750,7 +941,7 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         @summary: Convert Qt close widget event into close stack event
         @param e: QCloseEvent
         """
-        log.debug("closeEvent: scheduling close() from Qt thread:\n%s" % "".join(traceback.format_stack()))
+        log.debug(u'closeEvent: scheduling close() from Qt thread:\n%s' % u''.join(format_stack()))
         reactor.callFromThread(self._controller.close)
 
     def setResizeCallback(self, callback):
@@ -776,12 +967,44 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         mimeData.setUrls([QUrl.fromLocalFile(p) for p in paths])
         self._clipboard.setMimeData(mimeData)  # dataChanged announces them to the server
 
+    def setDynamicResolution(self, enabled):
+        """
+        @summary: Resizing the widget changes the remote resolution through the display
+        control channel (MS-RDPEDISP) when the server offers it (default True)
+        """
+        self._dynamicResolution = bool(enabled)
+
+    def _screenDpi(self):
+        try:
+            screen = self._widget.screen() if hasattr(self._widget, 'screen') else None
+            screen = screen or QApplication.primaryScreen()
+            return screen.physicalDotsPerInch() if screen is not None else None
+        except Exception:
+            return None
+
     def onResizeRequest(self, width, height):
         """
-        @summary: Called when the user resizes the widget, triggers reconnection
+        @summary: Called when the user resizes the widget: the display control channel
+        changes the remote resolution (FreeRDP /dynamic-resolution), else the resize
+        callback reconnects with the new size
         """
+        controller = self._controller
+        if getattr(self, '_dynamicResolution', True) and not getattr(self, '_railMode', False) and \
+                hasattr(controller, 'isDynamicResolutionActive') and controller.isDynamicResolutionActive():
+            from rdpy.protocol.rdp.channels import disp
+            physical = disp.physicalSize(width, height, self._screenDpi())
+            reactor.callFromThread(controller.requestDesktopSize, width, height, physical[0], physical[1])
+            return
         if self._resizeCallback:
             self._resizeCallback(width, height)
+
+    def onDynamicResolutionReady(self):
+        """
+        @summary: The display control channel is open (any thread): the remote desktop
+        takes the size of the widget if it changed while connecting
+        """
+        if getattr(self, '_dynamicResolution', True):
+            self._widget._dispReadySignal.emit()
 
     def onUpdate(self, destLeft, destTop, destRight, destBottom, width, height, bitsPerPixel, isCompress, data):
         """
@@ -800,7 +1023,7 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
             image = RDPBitmapToQtImage(width, height, bitsPerPixel, isCompress, data)
         except Exception as e:
             # one bad rectangle must never drop the others of the update
-            log.warning("bitmap %dx%d at %d,%d not drawn: %r" % (width, height, destLeft, destTop, e))
+            log.warning(u'bitmap %dx%d at %d,%d not drawn: %r' % (width, height, destLeft, destTop, e))
             return
         if image is None or image.isNull():
             return
@@ -820,7 +1043,7 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
                 try:
                     controller.onFirstPicture()
                 except Exception as e:  # never break painting for a notification
-                    log.warning("login screen notification failed: %s" % e)
+                    log.warning(u'login screen notification failed: %s' % e)
 
     def onLoginScreen(self):
         """
@@ -856,6 +1079,10 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         """@summary: drive file read / written by the server (RDPClientObserver, any thread)"""
         self._widget.driveFileTransferred.emit(direction, path, int(totalBytes))
 
+    def onPrintJob(self, printerName, title, totalBytes, destination, error):
+        """@summary: document printed through a redirected printer (RDPClientObserver, any thread)"""
+        self._widget.printJob.emit(printerName, title, int(totalBytes), destination or '', error or '')
+
     def onGfxPresent(self, items):
         """
         @summary: One RDPGFX frame: every updated area, painted together
@@ -886,25 +1113,25 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         offset = (src_top * surf_w + src_left) * 4
         needed_bytes = offset + (height - 1) * surf_w * 4 + width * 4
         if offset < 0 or needed_bytes > len(surf_buf):
-            log.warning("RDPGFX: surface region out of bounds")
+            log.warning(u'RDPGFX: surface region out of bounds')
             return
         # The decoder (on its own thread) keeps writing the next frames into
         # the surface, so snapshot the region now: the GUI thread paints it
         # later and must not see a half decoded frame.
         stride = surf_w * 4
-        surf = surf_buf if isinstance(surf_buf, np.ndarray) else np.frombuffer(surf_buf, dtype=np.uint8)
+        surf = surf_buf if isinstance(surf_buf, ndarray) else frombuffer(surf_buf, dtype=uint8)
         surf = surf.reshape(-1)
         rowBytes = width * 4
         if (src_top + height) * stride <= surf.shape[0]:
             rows = surf[src_top * stride:(src_top + height) * stride].reshape(height, stride)
-            region = np.ascontiguousarray(rows[:, src_left * 4:src_left * 4 + rowBytes])
+            region = ascontiguousarray(rows[:, src_left * 4:src_left * 4 + rowBytes])
         else:  # last row shorter than the stride
-            region = np.empty((height, rowBytes), dtype=np.uint8)
+            region = empty((height, rowBytes), dtype=uint8)
             for r in range(height):
                 start = offset + r * stride
                 region[r] = surf[start:start + rowBytes]
         image = QImage(region.data, width, height, width * 4,
-                             QImage.Format.Format_RGB32)
+                       QImage.Format.Format_RGB32)
         image._buffer_ref = region
         self._widget.notifyImage(dest_x, dest_y, image, width, height)
 
@@ -930,12 +1157,25 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         """
         pass
 
+    def getRailManager(self):
+        """@return: {rail_qt.RailManager|None} the RemoteApp windows"""
+        return self._railManager
+
+    def onRailEvent(self, kind, *args):
+        """
+        @summary: RemoteApp channel / window order event (any thread): to the windows
+        """
+        self._railMode = True
+        if self._railManager is not None:
+            self._railManager.railEvent(kind, *args)
+
     def onClose(self):
         """
         @summary: Call when stack is close
         @see: rdp.RDPClientObserver.onClose
         """
-        #do something maybe a message
+        if self._railManager is not None and self._railManager.active:
+            _get_qt_invoker().invoke(self._railManager.shutdown)
 
     def onPointerHide(self):
         """
@@ -960,7 +1200,7 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         if cursor is not None:
             self._widget.setCursorThreadSafe(cursor)
         else:
-            log.debug("RDPClientQt.onPointerCached() cache miss for index %d, restoring default" % cacheIndex)
+            log.debug(u'RDPClientQt.onPointerCached() cache miss for index %d, restoring default' % cacheIndex)
             self._widget.setCursorThreadSafe(QCursor(Qt.CursorShape.ArrowCursor))
 
     def onPointerUpdate(self, xorBpp, cacheIndex, hotSpotX, hotSpotY, width, height, andMask, xorMask):
@@ -979,16 +1219,16 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
         if xorBpp == 32:
             xor_stride = width * 4
             # Flip bottom-up to top-down using numpy reshape + flip
-            xor_arr = np.frombuffer(xorMask, dtype=np.uint8)
+            xor_arr = frombuffer(xorMask, dtype=uint8)
             needed = height * xor_stride
             if len(xor_arr) < needed:
-                xor_arr = np.concatenate(
-                    [xor_arr, np.zeros(needed - len(xor_arr), dtype=np.uint8)])
+                xor_arr = concatenate(
+                    [xor_arr, zeros(needed - len(xor_arr), dtype=uint8)])
             xor_2d = xor_arr[:needed].reshape(height, xor_stride)[::-1]
             buf = xor_2d.reshape(-1).copy()
             # Reshape as (H, W, 4) for vectorized alpha processing
             pixels = buf.reshape(height, width, 4)
-            has_alpha = np.any(pixels[:, :, 3] != 0)
+            has_alpha = np_any(pixels[:, :, 3] != 0)
 
             # Unpack AND mask bits into boolean array
             and_bits = self._unpack_and_mask(andMask, and_stride, width, height)
@@ -997,31 +1237,31 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
                 pixels[:, :, 3] = 255
                 # Transparent where AND=1 and pixel is black
                 black_mask = (pixels[:, :, 0] == 0) & (pixels[:, :, 1] == 0) & (pixels[:, :, 2] == 0)
-                pixels[:, :, 3] = np.where(and_bits & black_mask, 0, pixels[:, :, 3])
+                pixels[:, :, 3] = where(and_bits & black_mask, 0, pixels[:, :, 3])
             else:
                 # AND=1 and not fully transparent → force alpha 255
                 not_zero = (pixels[:, :, 0] != 0) | (pixels[:, :, 1] != 0) | (pixels[:, :, 2] != 0) | (
                         pixels[:, :, 3] != 0)
-                pixels[:, :, 3] = np.where(and_bits & not_zero, 255, pixels[:, :, 3]).astype(np.uint8)
+                pixels[:, :, 3] = where(and_bits & not_zero, 255, pixels[:, :, 3]).astype(uint8)
 
             image = QImage(pixels.tobytes(), width, height, width * 4, QImage.Format.Format_ARGB32)
 
         elif xorBpp == 24:
             xor_stride = width * 3
-            xor_arr = np.frombuffer(xorMask, dtype=np.uint8)
+            xor_arr = frombuffer(xorMask, dtype=uint8)
             needed = height * xor_stride
             if len(xor_arr) < needed:
-                xor_arr = np.pad(xor_arr, (0, needed - len(xor_arr)))
+                xor_arr = pad(xor_arr, (0, needed - len(xor_arr)))
             xor_2d = xor_arr[:needed].reshape(height, xor_stride)[::-1]
             bgr = xor_2d.reshape(height, width, 3).copy()
             # Build BGRA with alpha=255
-            pixels = np.empty((height, width, 4), dtype=np.uint8)
+            pixels = empty((height, width, 4), dtype=uint8)
             pixels[:, :, :3] = bgr
             pixels[:, :, 3] = 255
 
             and_bits = self._unpack_and_mask(andMask, and_stride, width, height)
             black_mask = (pixels[:, :, 0] == 0) & (pixels[:, :, 1] == 0) & (pixels[:, :, 2] == 0)
-            pixels[:, :, 3] = np.where(and_bits & black_mask, 0, pixels[:, :, 3])
+            pixels[:, :, 3] = where(and_bits & black_mask, 0, pixels[:, :, 3])
 
             image = QImage(pixels.tobytes(), width, height, width * 4, QImage.Format.Format_ARGB32)
 
@@ -1030,25 +1270,25 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
             and_bits = self._unpack_and_mask(andMask, and_stride, width, height)
             xor_bits = self._unpack_and_mask(xorMask, xor_stride, width, height)
 
-            pixels = np.zeros((height, width, 4), dtype=np.uint8)
+            pixels = zeros((height, width, 4), dtype=uint8)
             # AND=0, XOR=0 => black opaque
             m00 = ~and_bits & ~xor_bits
-            pixels[:, :, 3] = np.where(m00, 255, pixels[:, :, 3])
+            pixels[:, :, 3] = where(m00, 255, pixels[:, :, 3])
             # AND=0, XOR=1 => white opaque
             m01 = ~and_bits & xor_bits
-            pixels[:, :, 0] = np.where(m01, 255, pixels[:, :, 0])
-            pixels[:, :, 1] = np.where(m01, 255, pixels[:, :, 1])
-            pixels[:, :, 2] = np.where(m01, 255, pixels[:, :, 2])
-            pixels[:, :, 3] = np.where(m01, 255, pixels[:, :, 3])
+            pixels[:, :, 0] = where(m01, 255, pixels[:, :, 0])
+            pixels[:, :, 1] = where(m01, 255, pixels[:, :, 1])
+            pixels[:, :, 2] = where(m01, 255, pixels[:, :, 2])
+            pixels[:, :, 3] = where(m01, 255, pixels[:, :, 3])
             # AND=1, XOR=0 => transparent (already 0)
             # AND=1, XOR=1 => inverted (approximate as black opaque)
             m11 = and_bits & xor_bits
-            pixels[:, :, 3] = np.where(m11, 255, pixels[:, :, 3])
+            pixels[:, :, 3] = where(m11, 255, pixels[:, :, 3])
 
             image = QImage(pixels.tobytes(), width, height, width * 4, QImage.Format.Format_ARGB32)
 
         else:
-            log.debug("RDPClientQt.onPointerUpdate() unsupported bpp=%d" % xorBpp)
+            log.debug(u'RDPClientQt.onPointerUpdate() unsupported bpp=%d' % xorBpp)
             return
 
         pixmap = QPixmap.fromImage(image)
@@ -1059,13 +1299,13 @@ class RDPClientQt(RDPClientObserver, QAdaptor):
     @staticmethod
     def _unpack_and_mask(mask_data, stride, width, height):
         """Unpack a 1bpp mask (bottom-up, padded rows) into a (height, width) bool array."""
-        mask_arr = np.frombuffer(mask_data, dtype=np.uint8)
+        mask_arr = frombuffer(mask_data, dtype=uint8)
         needed = height * stride
         if len(mask_arr) < needed:
-            mask_arr = np.pad(mask_arr, (0, needed - len(mask_arr)))
+            mask_arr = pad(mask_arr, (0, needed - len(mask_arr)))
         rows = mask_arr[:needed].reshape(height, stride)[::-1]
         # Unpack all bits in each row, then truncate to width
-        bits = np.unpackbits(rows, axis=1)[:, :width]
+        bits = unpackbits(rows, axis=1)[:, :width]
         return bits.astype(bool)
 
 
@@ -1080,24 +1320,28 @@ class QRemoteDesktop(QWidget):
     # Logon state of the session (emitted from any thread, delivered in the GUI thread)
     loginScreenReached = pyqtSignal()
     desktopReached = pyqtSignal()
-    logonError = pyqtSignal(str)
+    logonError = pyqtSignal('QString')
     # File transfers: direction 'upload' (local -> server) or 'download'
-    fileTransferStarted = pyqtSignal(str, int, object)  # direction, items, total bytes
-    fileTransferProgress = pyqtSignal(str, object, object)  # direction, done, total
-    fileTransferFinished = pyqtSignal(str, object, object, str)  # direction, paths, bytes, status
-    driveFileTransferred = pyqtSignal(str, str, object)  # direction, path, bytes
+    fileTransferStarted = pyqtSignal('QString', int, object)  # direction, items, total bytes
+    fileTransferProgress = pyqtSignal('QString', object, object)  # direction, done, total
+    fileTransferFinished = pyqtSignal('QString', object, object, 'QString')  # direction, paths, bytes, status
+    driveFileTransferred = pyqtSignal('QString', 'QString', object)  # direction, path, bytes
+    # Redirected printers: printer, document title, bytes, destination, error ('' when printed)
+    printJob = pyqtSignal('QString', 'QString', object, 'QString', 'QString')
     # Thread-safe cursor update: Twisted thread emits, Qt main thread applies
     _cursorSignal = pyqtSignal(object)
     # Thread-safe remote resolution change (smart sizing scales to it)
     _remoteSizeSignal = pyqtSignal(int, int)
+    # The display control channel opened (any thread)
+    _dispReadySignal = pyqtSignal()
 
-    def __init__(self, width, height, adaptor):
+    def __init__(self, width, height, adaptor, *args, **kwargs):
         """
         @param adaptor: {QAdaptor}
         @param width: {int} width of widget
         @param height: {int} height of widget
         """
-        super(QRemoteDesktop, self).__init__()
+        super(QRemoteDesktop, self).__init__(*args, **kwargs)
         #adaptor use to send
         self._adaptor = adaptor
         self._buffer = None
@@ -1107,6 +1351,9 @@ class QRemoteDesktop(QWidget):
         self._updateSignal.connect(self._scheduleFlush)
         self._cursorSignal.connect(self._applyCursor)
         self._remoteSizeSignal.connect(self.setRemoteSize)
+        self._dispReadySignal.connect(self._onDisplayControlReady)
+        # RemoteApp windows painted from this frame buffer: callable(QRect) per painted area
+        self._damageListeners = []
         self._remoteCursor = None  # cursor shape from the server (scaled when smart sizing)
         #resize debounce
         self._programmaticResize = False
@@ -1126,7 +1373,7 @@ class QRemoteDesktop(QWidget):
         # single-shot timer ensures the flush runs *after* any already-queued
         # events (mouse clicks/moves), preventing bitmap floods from starving
         # input events.
-        self._pendingUpdates = collections.deque()
+        self._pendingUpdates = deque()
         self._flushScheduled = False
         self._updateFlushTimer = QTimer()
         self._updateFlushTimer.setSingleShot(True)
@@ -1134,6 +1381,8 @@ class QRemoteDesktop(QWidget):
         self._updateFlushTimer.timeout.connect(self._flushUpdates)
         self.userClosed = False
         self.setAcceptDrops(True)
+        # touch screens and pens go to MS-RDPEI when the server offers it
+        self.setAttribute(Qt.WidgetAttribute.WA_AcceptTouchEvents, True)
         # Smart sizing (mstsc "smart sizing", FreeRDP /smart-sizing): the remote
         # desktop keeps its resolution and is scaled to cover the whole widget,
         # like mstsc and FreeRDP (no black bars); resizing the window does not
@@ -1236,6 +1485,35 @@ class QRemoteDesktop(QWidget):
                     dirty = dirty.united(rect)
         if not dirty.isEmpty():
             self.update(self._toView(dirty))
+            self._notifyDamage(dirty)
+
+    def addDamageListener(self, listener):
+        """@param listener: callable(QRect) called (GUI thread) for each area painted in the frame buffer"""
+        self._damageListeners.append(listener)
+
+    def removeDamageListener(self, listener):
+        if listener in self._damageListeners:
+            self._damageListeners.remove(listener)
+
+    def _notifyDamage(self, rect):
+        for listener in list(self._damageListeners):
+            try:
+                listener(rect)
+            except Exception as e:
+                log.warning(u'frame buffer listener failed: %r' % (e,))
+
+    def frameBuffer(self):
+        """@return: {QImage} the remote desktop (GUI thread)"""
+        return self._buffer
+
+    @pyqtSlot()
+    def _onDisplayControlReady(self):
+        """The display control channel opened: the remote desktop takes the widget size."""
+        if self._smartSizing or self._adaptor is None or self._buffer is None or not self.isVisible():
+            return
+        size = (self.width(), self.height())
+        if size != (self._buffer.width(), self._buffer.height()) and min(size) > 0:
+            self._adaptor.onResizeRequest(size[0], size[1])
 
     # ---- smart sizing ----
 
@@ -1336,14 +1614,14 @@ class QRemoteDesktop(QWidget):
         self._pendingUpdates.clear()
         self._flushScheduled = False
 
-    def resize(self, width, height):
+    def resize(self, *args, **kwargs):
         """
         @summary: Programmatic resize (does not trigger RDP reconnection)
         @param width: {int} width of widget
         @param height: {int} height of widget
         """
         self._programmaticResize = True
-        QWidget.resize(self, width, height)
+        super(QRemoteDesktop, self).resize(*args, **kwargs)
 
     def resizeEvent(self, event):
         """
@@ -1440,6 +1718,7 @@ class QRemoteDesktop(QWidget):
                 qp.drawImage(0, 0, old)
         self._refreshCursor()
         self.update()
+        self._notifyDamage(self._buffer.rect())
 
     def setCursorThreadSafe(self, cursor):
         """
@@ -1522,18 +1801,24 @@ class QRemoteDesktop(QWidget):
 
     def _showMenu(self, pos):
         menu = QMenu(self)
-        info = menu.addAction("Session info...")
-        shot = menu.addAction("Screenshot...")
-        send = menu.addAction("Send files to the remote clipboard...")
+        info = menu.addAction(u'Session info...')
+        shot = menu.addAction(u'Screenshot...')
+        send = menu.addAction(u'Send files to the remote clipboard...')
         menu.addSeparator()
-        smart = menu.addAction("Smart sizing")
+        control = None
+        encomspLayer = getattr(getattr(self._adaptor, '_controller', None), '_encomspLayer', None)
+        if encomspLayer is not None and encomspLayer.participants:
+            control = menu.addAction(u'View only' if encomspLayer.hasControl else u'Request control')
+        smart = menu.addAction(u'Smart sizing')
         smart.setCheckable(True)
         smart.setChecked(self._smartSizing)
-        aspect = menu.addAction("Keep aspect ratio (black bars)")
+        aspect = menu.addAction(u'Keep aspect ratio (black bars)')
         aspect.setCheckable(True)
         aspect.setChecked(self._keepAspect)
         aspect.setEnabled(self._smartSizing)
         chosen = getattr(menu, 'exec')(pos) if hasattr(menu, 'exec') else menu.exec_(pos)
+        if control is not None and chosen is control:
+            reactor.callFromThread(self._adaptor._controller.setRemoteControl, not encomspLayer.hasControl)
         if chosen is smart:
             self.setSmartSizing(not self._smartSizing)
         elif chosen is aspect:
@@ -1542,11 +1827,11 @@ class QRemoteDesktop(QWidget):
             self.showSessionInfo()
         elif chosen is shot:
             path = QFileDialog.getSaveFileName(
-                self, "Save screenshot", "screenshot.png", "Images (*.png *.jpg *.bmp)")[0]
+                self, u'Save screenshot', u'screenshot.png', u'Images (*.png *.jpg *.bmp)')[0]
             if path:
                 self.saveScreenshot(path)
         elif chosen is send:
-            paths = QFileDialog.getOpenFileNames(self, "Files to paste in the session")[0]
+            paths = QFileDialog.getOpenFileNames(self, u'Files to paste in the session')[0]
             if paths and self._adaptor is not None and hasattr(self._adaptor, 'sendFiles'):
                 self._adaptor.sendFiles(paths)
 
@@ -1557,12 +1842,12 @@ class QRemoteDesktop(QWidget):
         try:
             report = self._adaptor.getSessionReport()
         except Exception as e:
-            report = "Session information unavailable: %s" % e
+            report = u'Session information unavailable: %s' % e
         box = QMessageBox(self)
-        box.setWindowTitle("Session information")
+        box.setWindowTitle(u'Session information')
         box.setText(report.split('\n\n', 1)[0])
         box.setDetailedText(report)
-        copy = box.addButton("Copy", QMessageBox.ButtonRole.ActionRole)
+        copy = box.addButton(u'Copy', QMessageBox.ButtonRole.ActionRole)
         box.addButton(QMessageBox.StandardButton.Close)
         getattr(box, 'exec')() if hasattr(box, 'exec') else box.exec_()
         if box.clickedButton() is copy:
@@ -1574,7 +1859,7 @@ class QRemoteDesktop(QWidget):
         @return: {bool} True when saved
         """
         ok = self._buffer is not None and not self._buffer.isNull() and self._buffer.save(path)
-        log.info("screenshot %s: %s" % ("saved" if ok else "FAILED", path))
+        log.info(u'screenshot %s: %s' % (u'saved' if ok else u'FAILED', path))
         return bool(ok)
 
     def dragEnterEvent(self, event):
@@ -1587,7 +1872,7 @@ class QRemoteDesktop(QWidget):
         if paths and self._adaptor is not None and hasattr(self._adaptor, 'sendFiles'):
             self._adaptor.sendFiles(paths)
             event.acceptProposedAction()
-            log.info("clipboard: %d dropped item(s) ready, press Ctrl+V in the session" % len(paths))
+            log.info(u'clipboard: %d dropped item(s) ready, press Ctrl+V in the session' % len(paths))
 
     def mouseReleaseEvent(self, event):
         """
@@ -1621,12 +1906,36 @@ class QRemoteDesktop(QWidget):
         if self._adaptor:
             self._adaptor.sendWheelEvent(event)
 
+    def event(self, event):
+        """
+        @summary: Touch events go to MS-RDPEI when available; otherwise Qt turns
+        them into mouse events (the default behaviour)
+        """
+        T = QEvent.Type
+        if event.type() in (T.TouchBegin, T.TouchUpdate, T.TouchEnd, T.TouchCancel):
+            if self._adaptor is not None and hasattr(self._adaptor, 'sendTouchEvent') and \
+                    self._adaptor.sendTouchEvent(event):
+                event.accept()
+                return True
+        return super(QRemoteDesktop, self).event(event)
+
+    def tabletEvent(self, event):
+        """
+        @summary: Pen events go to MS-RDPEI (protocol 2.0) when available, otherwise
+        they are ignored here and Qt makes mouse events of them
+        """
+        if self._adaptor is not None and hasattr(
+                self._adaptor, 'sendTabletEvent') and self._adaptor.sendTabletEvent(event):
+            event.accept()
+        else:
+            event.ignore()
+
     def closeEvent(self, event):
         """
         @summary: Call when widget is closed
         @param event: QCloseEvent
         """
-        log.debug("QRemoteDesktop.closeEvent fired:\n%s" % "".join(traceback.format_stack()))
+        log.debug(u'QRemoteDesktop.closeEvent fired:\n%s' % u''.join(format_stack()))
         self.userClosed = True
         callback = getattr(self, 'closedWithoutSession', None)
         if self._adaptor is None and callback is not None:

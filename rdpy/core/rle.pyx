@@ -2,7 +2,7 @@
 
 # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/b6a3f5c2-0804-4c10-9d25-a321720fd23e
 
-import sys
+from sys import byteorder
 
 from libc.string cimport memcpy, memset
 
@@ -341,7 +341,7 @@ cdef void _decompress2(unsigned char *output, int width, int height,
                 return
 
     # byteswap for big-endian
-    if sys.byteorder == 'big':
+    if byteorder == 'big':
         for i in range(total_pixels):
             v = pixels[i]
             pixels[i] = ((v >> 8) | (v << 8)) & 0xffff

@@ -28,7 +28,7 @@ class CallPureVirtualFuntion(Exception):
     @summary: Raise when a virtual function is called and not implemented
     """
 
-    def __init__(self, message=""):
+    def __init__(self, message=u''):
         """
         @param message: message show when exception is raised
         """
@@ -40,7 +40,7 @@ class InvalidValue(Exception):
     @summary: Raise when invalid value type occurred
     """
 
-    def __init__(self, message=""):
+    def __init__(self, message=u''):
         """
         @param message: message show when exception is raised
         """
@@ -52,7 +52,7 @@ class InvalidExpectedDataException(Exception):
     @summary: Raise when expected data on network is invalid
     """
 
-    def __init__(self, message=""):
+    def __init__(self, message=u''):
         """
         @param message: message show when exception is raised
         """
@@ -64,7 +64,7 @@ class NegotiationFailure(Exception):
     @summary: Raise when negotiation failure in different protocols
     """
 
-    def __init__(self, message=""):
+    def __init__(self, message=u''):
         """
         @param message: message show when exception is raised
         """
@@ -76,7 +76,7 @@ class InvalidType(Exception):
     @summary: Raise when invalid value type occured
     """
 
-    def __init__(self, message=""):
+    def __init__(self, message=u''):
         """
         @param message: message show when exception is raised
         """
@@ -88,7 +88,7 @@ class InvalidSize(Exception):
     @summary: Raise when invalid size is present in packet type occured
     """
 
-    def __init__(self, message=""):
+    def __init__(self, message=u''):
         """
         @param message: message show when exception is raised
         """
@@ -100,7 +100,7 @@ class ErrorReportedFromPeer(Exception):
     @summary: Raise when peer send an error
     """
 
-    def __init__(self, message=""):
+    def __init__(self, message=u''):
         """
         @param message: message show when exception is raised
         """
@@ -112,7 +112,7 @@ class RDPSecurityNegoFail(Exception):
     @summary: Raise when security nego fail
     """
 
-    def __init__(self, message=""):
+    def __init__(self, message=u''):
         """
         @param message: message show when exception is raised
         """

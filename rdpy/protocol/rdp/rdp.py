@@ -18,20 +18,21 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
-Use to manage RDP stack in twisted
+Use to manage RDP stack in twisted.
 """
 from __future__ import absolute_import, division, print_function
-
-import weakref
+from weakref import WeakSet
 from rdpy.core import layer
 from rdpy.core.error import CallPureVirtualFuntion, InvalidValue
-from . import pdu
-import rdpy.core.log as log
-from . import tpkt, x224, sec, drdynvc, rdpsnd, cliprdr, rdpdr, serverinfo
-from .t125 import mcs, gcc
+from .channels import ainput, sshagent, rdpecam, remdesk, echo, location, rdpei, rdp2tcp, geometry, video, encomsp, \
+    rdpewa, tsmf
+from .channels import drdynvc, rdpsnd, cliprdr, rdpdr, disp, rail, urbdrc
+from . import tpkt, x224, sec, serverinfo
 from .nla import cssp, ntlm
+from .t125 import mcs, gcc
+from rdpy.core import log
+from . import pdu
 
 
 class SecurityLevel(object):
@@ -47,8 +48,8 @@ class RDPClientController(pdu.layer.PDUClientListener):
     """
     Manage RDP stack as client
     """
-    # every controller, so an application can close all its sessions on exit
-    _instances = weakref.WeakSet()
+    # Every controller, so an application can close all its sessions on exit.
+    _instances = WeakSet()
 
     def __init__(self):
         RDPClientController._instances.add(self)
@@ -60,6 +61,54 @@ class RDPClientController(pdu.layer.PDUClientListener):
         self._drdynvcLayer.setGfxSurfaceCallback(self._onGfxSurface)
         self._drdynvcLayer.setGfxPresentCallback(self._onGfxPresent)
         self._drdynvcLayer.setCapsConfirmCallback(self._onGfxCapsConfirm)
+        #display control (MS-RDPEDISP): the resolution follows the window
+        self._disp = disp.DisplayControl()
+        self._disp.setCapsCallback(self._onDisplayControlReady)
+        self._drdynvcLayer.addListener(disp.CHANNEL_NAME, self._disp.channelFactory)
+        #USB redirection (MS-RDPEUSB): enabled by addUsbDevice
+        self._urbdrc = urbdrc.Urbdrc()
+        self._urbdrc.enabled = False
+        self._usbHotplug = None
+        self._drdynvcLayer.addListener(urbdrc.CHANNEL_NAME, self._urbdrc.channelFactory)
+        #advanced input (FreeRDP::Advanced::Input): opened by FreeRDP based servers
+        self._ainput = ainput.AInput()
+        self._drdynvcLayer.addListener(ainput.CHANNEL_NAME, self._ainput.channelFactory)
+        #ssh agent forwarding (SSHAGENT), enabled by setSshAgent
+        self._sshagent = sshagent.SshAgent()
+        self._drdynvcLayer.addListener(sshagent.CHANNEL_NAME, self._sshagent.channelFactory)
+        #camera redirection (MS-RDPECAM), enabled by setCameraRedirection
+        self._rdpecam = rdpecam.Rdpecam()
+        self._rdpecam.addTo(self._drdynvcLayer)
+        #echo (MS-RDPEECO), location (MS-RDPEL), multi-touch and pen (MS-RDPEI)
+        self._echo = echo.Echo()
+        self._drdynvcLayer.addListener(echo.CHANNEL_NAME, self._echo.channelFactory)
+        self._location = location.Location()
+        self._drdynvcLayer.addListener(location.CHANNEL_NAME, self._location.channelFactory)
+        self._rdpei = rdpei.Rdpei()
+        self._drdynvcLayer.addListener(rdpei.CHANNEL_NAME, self._rdpei.channelFactory)
+        #geometry tracking (MS-RDPEGT) and video optimized remoting (MS-RDPEVOR)
+        self._geometry = geometry.Geometry()
+        self._drdynvcLayer.addListener(geometry.CHANNEL_NAME, self._geometry.channelFactory)
+        self._video = video.Video(self._geometry)
+        self._video.setFrameCallback(self._onVideoFrame)
+        self._drdynvcLayer.addListener(video.CONTROL_CHANNEL_NAME, self._video.controlFactory)
+        self._drdynvcLayer.addListener(video.DATA_CHANNEL_NAME, self._video.dataFactory)
+        #multimedia redirection (MS-RDPEV, TSMF): Windows Media Player samples decoded here
+        self._tsmf = tsmf.Tsmf()
+        self._tsmf.frameCallback = self._onTsmfFrame
+        self._drdynvcLayer.addListener(tsmf.CHANNEL_NAME, self._tsmf.channelFactory)
+        #WebAuthn redirection (MS-RDPEWA): security keys of this computer for passkeys in the session
+        self._rdpewa = rdpewa.Rdpewa()
+        self._drdynvcLayer.addListener(rdpewa.CHANNEL_NAME, self._rdpewa.channelFactory)
+        #multiparty (MS-RDPEMSC, encomsp static channel): Remote Assistance control
+        self._encomspLayer = encomsp.EncomspLayer()
+        self._encomspLayer.setListener(self.onEncomspEvent)
+        #rdp2tcp static channel (TCP forwarding with an external program), added by setRdp2tcp
+        self._rdp2tcpLayer = rdp2tcp.Rdp2tcpLayer()
+        #Remote Assistance (remdesk static channel), added by setRemoteAssistance
+        self._remdeskLayer = remdesk.RemdeskLayer()
+        self._remdeskLayer.setListener(self.onRemoteAssistanceEvent)
+        self._remoteAssistance = None
         #audio output virtual channel layer
         self._rdpsndLayer = rdpsnd.RdpsndLayer()
         self._drdynvcLayer.setRdpsndLayer(self._rdpsndLayer)
@@ -67,6 +116,10 @@ class RDPClientController(pdu.layer.PDUClientListener):
         self._cliprdrLayer = cliprdr.CliprdrLayer()
         #device redirection (drives...) virtual channel layer
         self._rdpdrLayer = rdpdr.RdpdrLayer()
+        #RemoteApp (MS-RDPERP): the rail channel is added by setRemoteApp
+        self._railLayer = rail.RailLayer()
+        self._railLayer.setListener(self.onRailEvent)
+        self._railMode = False
         #PDU layer
         self._pduLayer = pdu.layer.Client(self)
         # AVC freeze recovery: when H.264 output stalls for too long, request
@@ -74,23 +127,37 @@ class RDPClientController(pdu.layer.PDUClientListener):
         self._drdynvcLayer.setRequestRefreshCallback(self._pduLayer.requestFullRefresh)
         #secure layer
         self._secLayer = sec.Client(self._pduLayer)
-        #multi channel service with drdynvc, rdpsnd, cliprdr, and rdpdr virtual channels
+        # multichannel service with drdynvc, rdpsnd, cliprdr, and rdpdr virtual channels
         channels = [
-            (gcc.ChannelDef(b"rdpdr",
+            (gcc.ChannelDef(b'rdpdr',
                             gcc.ChannelOptions.CHANNEL_OPTION_INITIALIZED | gcc.ChannelOptions.CHANNEL_OPTION_ENCRYPT_RDP | gcc.ChannelOptions.CHANNEL_OPTION_COMPRESS_RDP),
              self._rdpdrLayer),
-            (gcc.ChannelDef(b"rdpsnd",
+            (gcc.ChannelDef(b'rdpsnd',
                             gcc.ChannelOptions.CHANNEL_OPTION_INITIALIZED | gcc.ChannelOptions.CHANNEL_OPTION_ENCRYPT_RDP),
              self._rdpsndLayer),
-            (gcc.ChannelDef(b"cliprdr",
+            (gcc.ChannelDef(b'cliprdr',
                             gcc.ChannelOptions.CHANNEL_OPTION_INITIALIZED | gcc.ChannelOptions.CHANNEL_OPTION_ENCRYPT_RDP | gcc.ChannelOptions.CHANNEL_OPTION_COMPRESS_RDP | gcc.ChannelOptions.CHANNEL_OPTION_SHOW_PROTOCOL),
              self._cliprdrLayer),
-            (gcc.ChannelDef(b"drdynvc",
+            (gcc.ChannelDef(b'drdynvc',
                             gcc.ChannelOptions.CHANNEL_OPTION_INITIALIZED | gcc.ChannelOptions.CHANNEL_OPTION_ENCRYPT_RDP),
              self._drdynvcLayer),
         ]
         # channels that options may remove and add back
-        self._optionalChannels = {self._rdpsndLayer: channels[1], self._cliprdrLayer: channels[2]}
+        self._optionalChannels = {
+            self._rdpsndLayer: channels[1], self._cliprdrLayer: channels[2],
+            self._railLayer: (gcc.ChannelDef(b'rail',
+                                             gcc.ChannelOptions.CHANNEL_OPTION_INITIALIZED | gcc.ChannelOptions.CHANNEL_OPTION_ENCRYPT_RDP | gcc.ChannelOptions.CHANNEL_OPTION_COMPRESS_RDP | gcc.ChannelOptions.CHANNEL_OPTION_SHOW_PROTOCOL),
+                              self._railLayer),
+            self._remdeskLayer: (gcc.ChannelDef(b'remdesk',
+                                                gcc.ChannelOptions.CHANNEL_OPTION_INITIALIZED | gcc.ChannelOptions.CHANNEL_OPTION_ENCRYPT_RDP | gcc.ChannelOptions.CHANNEL_OPTION_COMPRESS_RDP | gcc.ChannelOptions.CHANNEL_OPTION_SHOW_PROTOCOL),
+                                 self._remdeskLayer),
+            self._rdp2tcpLayer: (gcc.ChannelDef(b'rdp2tcp',
+                                                gcc.ChannelOptions.CHANNEL_OPTION_INITIALIZED | gcc.ChannelOptions.CHANNEL_OPTION_ENCRYPT_RDP | gcc.ChannelOptions.CHANNEL_OPTION_COMPRESS_RDP),
+                                 self._rdp2tcpLayer),
+            self._encomspLayer: (gcc.ChannelDef(b'encomsp',
+                                                gcc.ChannelOptions.CHANNEL_OPTION_INITIALIZED | gcc.ChannelOptions.CHANNEL_OPTION_ENCRYPT_RDP | gcc.ChannelOptions.CHANNEL_OPTION_COMPRESS_RDP | gcc.ChannelOptions.CHANNEL_OPTION_SHOW_PROTOCOL),
+                                 self._encomspLayer),
+        }
         self._mcsLayer = mcs.Client(self._secLayer, channels)
         #transport pdu layer
         self._x224Layer = x224.Client(self._mcsLayer)
@@ -121,6 +188,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
         self._cliprdrLayer.setTransferListener(self)
         self._drdynvcLayer._desktopSizeCallback = self.onDesktopSize
         self._rdpdrLayer.setDriveTransferCallback(self.onDriveFileTransferred)
+        self._rdpdrLayer.setPrintJobCallback(self.onPrintJob)
         self._lastError = None
         self._connectedAt = None
 
@@ -135,7 +203,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
         in 32 bits, so a lower depth uses the legacy bitmap updates (as FreeRDP).
         """
         if bpp not in (15, 16, 24, 32):
-            raise ValueError("colour depth must be 15, 16, 24 or 32")
+            raise ValueError(u'colour depth must be 15, 16, 24 or 32')
         core = self._mcsLayer._clientSettings.getBlock(gcc.MessageType.CS_CORE)
         core.highColorDepth.value = {15: gcc.HighColor.HIGH_COLOR_15BPP,
                                      16: gcc.HighColor.HIGH_COLOR_16BPP}.get(bpp, gcc.HighColor.HIGH_COLOR_24BPP)
@@ -174,7 +242,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
         @param mode: {str} 'off' (no clipboard channel), 'text' or 'files' (text and files)
         """
         if mode not in ('off', 'text', 'files'):
-            raise ValueError("clipboard mode must be off, text or files")
+            raise ValueError(u'clipboard mode must be off, text or files')
         self._clipboardMode = mode
         self._setChannel(self._cliprdrLayer, mode != 'off')
         self._cliprdrLayer.setFileTransferEnabled(mode == 'files')
@@ -211,6 +279,261 @@ class RDPClientController(pdu.layer.PDUClientListener):
         self._secLayer._info.workingDir.value = path
 
     # -------------------------------------------------------------------
+    # FreeRDP channels: advanced input, ssh agent, camera, Remote Assistance
+    # -------------------------------------------------------------------
+
+    def setAdvancedInput(self, enabled):
+        """
+        @summary: Accept FreeRDP's advanced input channel (default True): while a server
+        opens it, mouse and wheel events use it instead of the input PDUs
+        """
+        self._ainput.enabled = bool(enabled)
+
+    def setSshAgent(self, enabled, path=None):
+        """
+        @summary: Forward the local ssh-agent to the session (FreeRDP /ssh-agent)
+        @param path: {str|None} agent socket / pipe (None: SSH_AUTH_SOCK, or the Windows OpenSSH pipe)
+        """
+        self._sshagent.enabled = bool(enabled)
+        self._sshagent.path = path
+
+    def setCameraRedirection(self, enabled, source=None):
+        """
+        @summary: Redirect the cameras of this computer (MS-RDPECAM)
+        @param source: {rdpecam.CameraSource|None} None: Qt Multimedia cameras
+        """
+        self._rdpecam.enabled = bool(enabled)
+        if source is not None:
+            self._rdpecam.source = source
+
+    def setRemoteAssistance(self, invitation, expertName=None):
+        """
+        @summary: Connect as the expert of a Windows Remote Assistance invitation
+        (FreeRDP /assistance): remdesk channel, and the Client Info of Remote Assistance
+        mode (FreeRDP info.c: password "*", alternate shell "*" with a PassStub, the
+        RA session id as working directory)
+        @param invitation: {assistance.Invitation}
+        """
+        self._remoteAssistance = invitation
+        self._remdeskLayer.setInvitation(invitation, expertName or invitation.username or None)
+        self._setChannel(self._remdeskLayer, True)
+        info = self._secLayer._info
+        info.password.value = u'*'
+        info.alternateShell.value = u'*' if invitation.passStub else (invitation.password or u'')
+        info.workingDir.value = invitation.sessionId or u''
+        # FreeRDP /assistance enables the encomsp channel too (control requests)
+        self.setEncomsp(True, getattr(self, '_requestControl', True))
+        if invitation.username:
+            self.setUsername(invitation.username)
+
+    def setEcho(self, enabled):
+        """@summary: Answer the server's echo channel (MS-RDPEECO, FreeRDP /echo)"""
+        self._echo.enabled = bool(enabled)
+
+    def setLocation(self, latitude=None, longitude=None, altitude=0, enabled=True):
+        """
+        @summary: Give a position to the session (MS-RDPEL). Without coordinates the channel
+        is accepted and the position comes later (setLocation again or a position source).
+        """
+        self._location.enabled = bool(enabled)
+        if latitude is not None and longitude is not None:
+            self._location.setPosition(latitude, longitude, altitude)
+
+    def setMultitouch(self, enabled):
+        """@summary: Multi-touch and pen input (MS-RDPEI, FreeRDP /multitouch)"""
+        self._rdpei.enabled = bool(enabled)
+
+    def sendTouch(self, points):
+        """
+        @summary: Touch points of one event: [(id, 'begin'|'update'|'end'|'cancel', x, y)]
+        @return: {bool} sent through MS-RDPEI (False: not available, use mouse events)
+        """
+        if not self._isReady:
+            return False
+        return self._rdpei.touch(points)
+
+    def sendPen(self, state, x, y, **kwargs):
+        """@summary: Pen event (rdpei.Rdpei.pen); @return: {bool} sent through MS-RDPEI"""
+        if not self._isReady:
+            return False
+        return self._rdpei.pen(state, x, y, **kwargs)
+
+    def setRdp2tcp(self, command):
+        """
+        @summary: TCP forwarding with rdp2tcp (FreeRDP /rdp2tcp:<command>): the local
+        program is started when the channel joins and relayed to the server
+        """
+        self._rdp2tcpLayer.setCommand(command)
+        self._setChannel(self._rdp2tcpLayer, bool(command))
+
+    def setVideo(self, enabled):
+        """
+        @summary: Video optimized remoting (MS-RDPEVOR, FreeRDP /video): videos playing in the
+        session come as H.264 and are shown where the geometry channel places them; enables
+        geometry tracking too, which it needs
+        """
+        self._video.enabled = bool(enabled)
+        if enabled:
+            self._geometry.enabled = True
+
+    def setGeometryTracking(self, enabled):
+        """@summary: Geometry tracking (MS-RDPEGT, FreeRDP /geometry)"""
+        self._geometry.enabled = bool(enabled)
+
+    def setMultimediaRedirection(self, enabled, audioFactory=None):
+        """
+        @summary: Multimedia redirection (MS-RDPEV, TSMF, FreeRDP /multimedia): Windows Media
+        Player audio / video samples decoded and played here
+        @param audioFactory: {callable(rate, channels) -> player} (tsmf.AudioOutPlayer by default)
+        """
+        self._tsmf.enabled = bool(enabled)
+        if audioFactory is not None:
+            self._tsmf.audioFactory = audioFactory
+
+    def _onTsmfFrame(self, x, y, width, height, bgra, visibleRects):
+        """@summary: A TSMF video frame (playback thread)"""
+        self._fanOut('onTsmfFrame', x, y, width, height, bgra, visibleRects)
+
+    def setWebAuthn(self, enabled, pinCallback=None, notifyCallback=None):
+        """
+        @summary: WebAuthn redirection (MS-RDPEWA): passkey / security key sign-ins in the
+        session use the FIDO2 keys plugged into this computer (python-fido2)
+        @param pinCallback: {callable(prompt) -> str|None} asks the user for the key's PIN
+        """
+        self._rdpewa.enabled = bool(enabled)
+        if pinCallback is not None:
+            self._rdpewa.setPinCallback(pinCallback)
+        if notifyCallback is not None:
+            self._rdpewa.setNotifyCallback(notifyCallback)
+
+    def setEncomsp(self, enabled, requestControl=True):
+        """
+        @summary: Multiparty channel (MS-RDPEMSC); with Remote Assistance it requests the control
+        of the novice's desktop once (requestControl, FreeRDP RemoteAssistanceRequestControl)
+        """
+        self._encomspLayer.requestControl = bool(requestControl)
+        self._setChannel(self._encomspLayer, bool(enabled))
+
+    def setRemoteControl(self, control):
+        """@summary: Remote Assistance: ask for control (True) or go back to view only (False)"""
+        self._encomspLayer.setControl(bool(control))
+
+    def onEncomspEvent(self, *event):
+        """@summary: encomsp events (EncomspLayer listener)"""
+        self._fanOut('onEncomspEvent', *event)
+
+    def _onVideoFrame(self, x, y, width, height, bgra):
+        """@summary: A video frame to show at x, y (MS-RDPEVOR), reactor thread"""
+        self._fanOut('onVideoFrame', x, y, width, height, bgra)
+
+    def onRemoteAssistanceEvent(self, *event):
+        """@summary: remdesk events: ('version', minor), ('result', code, text), ('disconnect',)"""
+        self._fanOut('onRemoteAssistanceEvent', *event)
+
+    # -------------------------------------------------------------------
+    # Display control (MS-RDPEDISP, FreeRDP /dynamic-resolution)
+    # -------------------------------------------------------------------
+
+    def setDynamicResolution(self, enabled):
+        """
+        @summary: Accept the display control channel (default True): requestDesktopSize()
+        then changes the remote resolution without reconnecting. Call before connecting.
+        """
+        self._disp.enabled = bool(enabled)
+
+    def setScaleFactors(self, desktopScaleFactor=100, deviceScaleFactor=100):
+        """
+        @summary: Scaling of the remote desktop (FreeRDP /scale-desktop, /scale-device):
+        sent when connecting and in the display control layouts
+        @param desktopScaleFactor: {int} 100 - 500 percent
+        @param deviceScaleFactor: {int} 100, 140 or 180 percent
+        @raise ValueError: values the server does not accept
+        """
+        desktopScaleFactor, deviceScaleFactor = int(desktopScaleFactor), int(deviceScaleFactor)
+        if not disp.validScaleFactors(desktopScaleFactor, deviceScaleFactor):
+            raise ValueError(u'desktop scale must be 100 - 500 %, device scale 100, 140 or 180 %')
+        core = self._mcsLayer._clientSettings.getBlock(gcc.MessageType.CS_CORE)
+        core.desktopScaleFactor.value = desktopScaleFactor
+        core.deviceScaleFactor.value = deviceScaleFactor
+        self._disp.desktopScaleFactor = desktopScaleFactor
+        self._disp.deviceScaleFactor = deviceScaleFactor
+
+    def isDynamicResolutionActive(self):
+        """@return: {bool} the server opened the display control channel (any thread)"""
+        return self._isReady and self._disp.isActive()
+
+    def requestDesktopSize(self, width, height, physicalWidth=0, physicalHeight=0):
+        """
+        @summary: Ask the server to change the resolution (display control channel), network
+        thread. The new size arrives through onDesktopResize.
+        @param physicalWidth: {int} millimetres of the local screen area, 0 when unknown
+        @return: {tuple|None} (width, height) requested (even, 200 - 8192), None when the
+        channel is not open (reconnect with the new size instead)
+        """
+        if not self._disp.enabled or not self._isReady:
+            return None
+        size = self._disp.requestSize(width, height, physicalWidth, physicalHeight)
+        return size if self._disp.isActive() else None
+
+    def _onDisplayControlReady(self, maxMonitors, factorA, factorB):
+        self._fanOut('onDynamicResolutionReady')
+
+    # -------------------------------------------------------------------
+    # RemoteApp (MS-RDPERP, FreeRDP /app)
+    # -------------------------------------------------------------------
+
+    def setRemoteApp(self, app, hidef=False):
+        """
+        @summary: Run one program instead of the desktop: its windows are shown as local
+        windows (RemoteApp). Call before connecting.
+        @param app: {rail.RemoteApp | str} program ("||alias" of a published RemoteApp, or a
+        path the server allows), see rail.parseAppSpec
+        @param hidef: {bool} Enhanced RemoteApp (window surfaces through the graphics pipeline)
+        """
+        if not isinstance(app, rail.RemoteApp):
+            app = rail.parseAppSpec(app)
+        hidef = bool(getattr(app, 'hidef', hidef))
+        self._railMode = True
+        self._railLayer.app = app
+        self._setChannel(self._railLayer, True)
+        info = self._secLayer._info
+        info.flag.value |= sec.InfoFlag.INFO_RAIL
+        if hidef:
+            info.flag.value |= sec.InfoFlag.INFO_HIDEF_RAIL_SUPPORTED
+        else:
+            info.flag.value &= ~sec.InfoFlag.INFO_HIDEF_RAIL_SUPPORTED
+        info.alternateShell.value = u''  # the program starts through the rail channel
+        # no wallpaper; windows dragged with their content (the server moves them)
+        perf = info.extendedInfo.performanceFlags
+        perf.value = (perf.value | sec.PerfFlag.PERF_DISABLE_WALLPAPER) & ~sec.PerfFlag.PERF_DISABLE_FULLWINDOWDRAG
+        self._pduLayer._railEnabled = True
+        self._pduLayer._ordersHandler = rail.WindowOrderParser(self.onRailEvent)
+        self._drdynvcLayer.setGfxWindowCallback(self._onGfxWindowSurface)
+
+    def isRemoteApp(self):
+        """@return: {bool} RemoteApp session (setRemoteApp)"""
+        return self._railMode
+
+    def getRailLayer(self):
+        """@return: {rail.RailLayer} window commands: activate, sysCommand, sysMenu,
+        notifyEvent, windowMove, setWorkArea (any thread)"""
+        return self._railLayer
+
+    def onRailEvent(self, kind, *args):
+        """
+        @summary: RemoteApp event (rail channel or window order, network thread; 'surface'
+        from the graphics thread): to the observers' onRailEvent(kind, *args)
+        """
+        if kind == 'desktop':
+            self._railLayer.onDesktopOrder(args[0])
+        self._fanOut('onRailEvent', kind, *args)
+
+    def _onGfxWindowSurface(self, windowId, x, y, width, height, bgra, surfaceWidth, surfaceHeight,
+                            mappedWidth, mappedHeight):
+        self._fanOut('onRailEvent', 'surface', windowId, x, y, width, height, bgra, surfaceWidth,
+                     surfaceHeight, mappedWidth, mappedHeight)
+
+    # -------------------------------------------------------------------
     # Session report (PyFreeRdpApp getSessionInfo)
     # -------------------------------------------------------------------
 
@@ -224,7 +547,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
         if infoType == serverinfo.INFOTYPE_LOGON_EXTENDED_INFO:
             error = serverinfo.parseLogonErrors(data)
             if error is not None:
-                log.warning("logon: %s" % error[2])
+                log.warning(u'logon: %s' % error[2])
                 for observer in self._clientObserver:
                     callback = getattr(observer, 'onLogonError', None)
                     if callback is not None:
@@ -233,7 +556,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
         if infoType in (serverinfo.INFOTYPE_LOGON, serverinfo.INFOTYPE_LOGON_LONG,
                         serverinfo.INFOTYPE_LOGON_PLAINNOTIFY) and not self._loggedOn:
             self._loggedOn = True
-            log.info("logon: the user is logged on, the desktop is starting")
+            log.info(u'logon: the user is logged on, the desktop is starting')
             for observer in self._clientObserver:
                 callback = getattr(observer, 'onDesktopReady', None)
                 if callback is not None:
@@ -241,8 +564,8 @@ class RDPClientController(pdu.layer.PDUClientListener):
         info = serverinfo.parseLogonInfo(infoType, data)
         if info:
             self._logonInfo = info
-            log.info("logged on as %s\\%s (session %d)" % (info.get('domain', ''), info.get('user', ''),
-                                                           info.get('sessionId', 0)))
+            log.info(u'logged on as %s\\%s (session %d)' % (info.get('domain', ''), info.get('user', ''),
+                                                            info.get('sessionId', 0)))
 
     def onFirstPicture(self):
         """
@@ -253,7 +576,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
         if self._loggedOn or self._loginScreenNotified:
             return
         self._loginScreenNotified = True
-        log.info("logon: the login screen is displayed")
+        log.info(u'logon: the login screen is displayed')
         for observer in self._clientObserver:
             callback = getattr(observer, 'onLoginScreen', None)
             if callback is not None:
@@ -266,7 +589,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
                 try:
                     callback(*args)
                 except Exception as e:
-                    log.warning("observer %s failed: %s" % (name, e))
+                    log.warning(u'observer %s failed: %s' % (name, e))
 
     def onDesktopSize(self, width, height):
         """
@@ -274,10 +597,13 @@ class RDPClientController(pdu.layer.PDUClientListener):
         any thread
         """
         if width > 0 and height > 0:
+            drdynvc.callInReactor(self._disp.noteDesktopSize, int(width), int(height))
             self._fanOut('onDesktopResize', int(width), int(height))
 
     def getServerDesktopSize(self):
         """@return: {tuple|None} (width, height) the server activated the session with"""
+        if getattr(self._pduLayer, '_serverDesktopSize', None):
+            return self._pduLayer._serverDesktopSize
         cap = self._pduLayer._serverCapabilities.get(pdu.caps.CapsType.CAPSTYPE_BITMAP)
         if cap is None:
             return None
@@ -288,7 +614,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
 
     def onFileTransferStarted(self, direction, items, totalBytes):
         """@summary: clipboard file transfer started ('upload' local -> server, 'download')"""
-        log.info("file transfer (%s) started: %d item(s), %d bytes" % (direction, items, totalBytes))
+        log.info(u'file transfer (%s) started: %d item(s), %d bytes' % (direction, items, totalBytes))
         self._fanOut('onFileTransferStarted', direction, items, totalBytes)
 
     def onFileTransferProgress(self, direction, doneBytes, totalBytes):
@@ -297,14 +623,19 @@ class RDPClientController(pdu.layer.PDUClientListener):
 
     def onFileTransferFinished(self, direction, paths, totalBytes, status):
         """@summary: clipboard file transfer finished: status completed / partial / cancelled"""
-        log.info("file transfer (%s) %s: %d bytes" % (direction, status, totalBytes))
+        log.info(u'file transfer (%s) %s: %d bytes' % (direction, status, totalBytes))
         self._fanOut('onFileTransferFinished', direction, list(paths), totalBytes, status)
 
     def onDriveFileTransferred(self, direction, path, totalBytes):
         """@summary: the server finished reading ('upload') or writing ('download') a file
         of a redirected drive (called from the drive thread)"""
-        log.info("drive file %s: %s (%d bytes)" % (direction, path, totalBytes))
+        log.info(u'drive file %s: %s (%d bytes)' % (direction, path, totalBytes))
         self._fanOut('onDriveFileTransferred', direction, path, totalBytes)
+
+    def onPrintJob(self, printerName, title, totalBytes, destination, error):
+        """@summary: a document printed on the server was handed to a local printer
+        (error is None) or could not be printed (called from the printer thread)"""
+        self._fanOut('onPrintJob', printerName, title, totalBytes, destination, error)
 
     def isLoggedOn(self):
         """@return: {bool} the server notified that the user is logged on (desktop)"""
@@ -324,13 +655,13 @@ class RDPClientController(pdu.layer.PDUClientListener):
         and certificate - all from data received while connecting
         @return: {dict} sections of {name: value}
         """
-        import time as _time
+        from time import time
         core = self._mcsLayer._clientSettings.getBlock(gcc.MessageType.CS_CORE)
         report = {}
         report['status'] = {
             'connected': self._isReady,
             'lastError': self._lastError[1] if self._lastError else None,
-            'duration': serverinfo.humanDuration(_time.time() - self._connectedAt)
+            'duration': serverinfo.humanDuration(time() - self._connectedAt)
             if self._connectedAt else None,
         }
         report['connection'] = {
@@ -364,10 +695,35 @@ class RDPClientController(pdu.layer.PDUClientListener):
             'sound': self._soundEnabled,
             'microphone': ('on (%d channel(s) open)' % len(gfx._audinChannels)) if self._microphoneEnabled else False,
             'clipboard': {'off': False, 'text': 'text', 'files': 'text + files'}[self._clipboardMode],
+            'dynamicResolution': ('active' if self._disp.isActive() else 'not offered by the server')
+            if self._disp.enabled else False,
+            'usb': (', '.join(self._urbdrc.describe()) or ('devices plugged in' if self._usbHotplug else None))
+            if self._urbdrc.enabled else None,
+            'advancedInput': self._ainput.describe(),
+            'touch': (self._rdpei.describe() or 'not offered by the server') if self._rdpei.enabled else None,
+            'video': (self._video.describe() or 'no video played') if self._video.enabled else None,
+            'webAuthn': (self._rdpewa.describe() or 'no sign-in yet') if self._rdpewa.enabled else None,
+            'multimedia': (self._tsmf.describe() or 'nothing played') if self._tsmf.enabled else None,
+            'geometry': (self._geometry.describe() or 'no mapping') if self._geometry.enabled else None,
+            'multiparty': (self._encomspLayer.describe() or 'no participant')
+            if any(vc[1] is self._encomspLayer for vc in self._mcsLayer._virtualChannels) else None,
+            'location': (self._location.describe() or 'no position sent') if self._location.enabled else None,
+            'echo': (self._echo.describe() or 'not used by the server') if self._echo.enabled else None,
+            'rdp2tcp': (self._rdp2tcpLayer.describe() or 'not started') if self._rdp2tcpLayer.command else None,
+            'sshAgent': (
+                    self._sshagent.describe() or 'not requested by the server') if self._sshagent.enabled else None,
+            'camera': (self._rdpecam.describe() or 'not requested by the server') if self._rdpecam.enabled else None,
+            'remoteAssistance': ('protocol 1.%d, %s' % (self._remdeskLayer.version, remdesk.RESULTS.get(
+                self._remdeskLayer.lastResult, 'waiting for the novice') if self._remdeskLayer.lastResult is not None
+            else 'waiting for the novice') if self._remdeskLayer.version else 'connecting')
+            if self._remoteAssistance is not None else None,
+            'remoteApp': ('%s (%s)' % (self._railLayer.app.program,
+                                       'started' if self._railLayer.started else 'starting'))
+            if self._railMode else False,
             'serverFileTransfer': clip._fileTransferEnabled() if self._clipboardMode == 'files' else None,
-            'drives': ', '.join('%s (%s)' % (d.name, getattr(d, 'basePath', '?'))
-                                for d in self._rdpdrLayer.getDevices()) or None,
         }
+        for kind, items in self._rdpdrLayer.describeDevices().items():
+            features[kind] = ', '.join(items) or None
         report['features'] = features
         cert = serverinfo.findPeerCertificate(transport)
         if cert is not None:
@@ -409,6 +765,122 @@ class RDPClientController(pdu.layer.PDUClientListener):
         """
         return self._rdpdrLayer.addDrive(name, path)
 
+    def addPrinter(self, printerName, driverName=None, isDefault=False):
+        """
+        @summary: Redirect a local printer (CUPS on Linux / macOS, the spooler on Windows):
+        documents printed on the server are printed on it. Call before connecting.
+        @param printerName: {str} local printer name, also shown on the server
+        @param driverName: {str|None} Windows driver the server renders with (default
+                           "MS Publisher Imagesetter", PostScript; "Microsoft Print to PDF")
+        @param isDefault: {bool} default printer of the remote session
+        @return: {int} RDPDR device id
+        """
+        return self._rdpdrLayer.addPrinter(printerName, driverName, isDefault)
+
+    def addAllPrinters(self):
+        """
+        @summary: Redirect every local printer (the local default stays the default)
+        @return: {list[int]} RDPDR device ids
+        """
+        return self._rdpdrLayer.addAllPrinters()
+
+    def addPrintToFolder(self, folder, driverName=None, isDefault=False):
+        """
+        @summary: A redirected printer that saves the documents in a local folder
+        (PDF files with the default driver)
+        @return: {int} RDPDR device id
+        """
+        return self._rdpdrLayer.addPrintToFolder(folder, driverName, isDefault)
+
+    def addSerialPort(self, name, path, driver=None, permissive=False):
+        """
+        @summary: Redirect a local serial port (needs pyserial). Call before connecting.
+        @param name: {str} port name on the server (COM1...)
+        @param path: {str} local port (/dev/ttyUSB0, COM3) or a pyserial URL
+                     (socket://host:port, rfc2217://host:port)
+        @param driver: {str|None} serial driver of the server: Serial, SerCx, SerCx2
+        @param permissive: {bool} report unsupported requests as successful
+        @return: {int} RDPDR device id
+        """
+        return self._rdpdrLayer.addSerialPort(name, path, driver, permissive)
+
+    def addParallelPort(self, name, path):
+        """
+        @summary: Redirect a local parallel port. Call before connecting.
+        @param name: {str} port name on the server (LPT1...)
+        @param path: {str} local device (/dev/lp0, /dev/usb/lp0) or file
+        @return: {int} RDPDR device id
+        """
+        return self._rdpdrLayer.addParallelPort(name, path)
+
+    def addSmartcard(self, readerFilters=None):
+        """
+        @summary: Redirect the local smart card readers (needs pyscard and a PC/SC service).
+        Call before connecting.
+        @param readerFilters: {list[str]|None} only the readers whose name contains one of them
+        @return: {int} RDPDR device id
+        @raise OSError: pyscard is not installed
+        """
+        return self._rdpdrLayer.addSmartcard(readerFilters)
+
+    def addUsbDevice(self, device):
+        """
+        @summary: Redirect local USB devices (MS-RDPEUSB, FreeRDP /usb; needs python-libusb1).
+        Call before connecting.
+        @param device: {str} "VVVV:PPPP", "id:VVVV:PPPP[#...]", "addr:BUS:ADDRESS[#...]" or
+        "auto" (devices plugged in during the session), see urbdrc.parseUsbSpec;
+        or a {urbdrc.UsbDeviceBackend}
+        @return: {list[str]} the devices found
+        @raise ValueError: bad description, no such device
+        @raise OSError: python-libusb1 / libusb missing
+        """
+        if isinstance(device, urbdrc.UsbDeviceBackend):
+            self._urbdrc.enabled = True
+            return [self._urbdrc.addDevice(device).describe()]
+        specs = urbdrc.parseUsbSpec(device)
+        from .channels import urbdrc_libusb
+        found = []
+        if any(s[0] == 'auto' for s in specs):
+            self._watchUsbHotplug(urbdrc_libusb)
+            found.append('auto')
+        devices = urbdrc_libusb.findDevices(specs)
+        if not devices and not found:
+            raise ValueError(u'no USB device matches \'%s\'' % device)
+        known = set((d.backend.bus, d.backend.address) for d in self._urbdrc.devices)
+        for backend in devices:
+            if (backend.bus, backend.address) not in known:
+                found.append(self._urbdrc.addDevice(backend).describe())
+        self._urbdrc.enabled = True
+        return found
+
+    def _watchUsbHotplug(self, backendModule):
+        """FreeRDP /usb:auto: devices plugged in while connected are redirected"""
+        if self._usbHotplug is not None:
+            return
+        ctx = backendModule.LibusbContext.get()
+
+        def arrived(backend):
+            if not getattr(backend, 'isHub', False):
+                drdynvc.callInReactor(self._urbdrc.addDevice, backend)
+
+        def left(bus, address):
+            def remove():
+                for device in list(self._urbdrc.devices):
+                    if (device.backend.bus, device.backend.address) == (bus, address):
+                        log.info(u'USB %s unplugged' % device.describe())
+                        self._urbdrc.removeDevice(device.backend)
+
+            drdynvc.callInReactor(remove)
+
+        ctx.watchHotplug(arrived, left)
+        self._usbHotplug = ctx
+
+    def _stopUsb(self):
+        ctx, self._usbHotplug = self._usbHotplug, None
+        if ctx is not None:
+            ctx.stopHotplug()
+        self._urbdrc.shutdown()
+
     def addRdpdrDevice(self, device):
         """
         @summary: Register a custom RDPDR device (rdpdr.RdpdrDevice subclass)
@@ -448,7 +920,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
                 sec.PerfFlag.PERF_DISABLE_WALLPAPER |
                 sec.PerfFlag.PERF_DISABLE_MENUANIMATIONS |
                 sec.PerfFlag.PERF_DISABLE_CURSOR_SHADOW |
-                sec.PerfFlag.PERF_DISABLE_FULLWINDOWDRAG |
+                (0 if self._railMode else sec.PerfFlag.PERF_DISABLE_FULLWINDOWDRAG) |
                 sec.PerfFlag.PERF_ENABLE_FONT_SMOOTHING |
                 sec.PerfFlag.PERF_ENABLE_DESKTOP_COMPOSITION
         )
@@ -507,7 +979,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
         """
         value = getattr(gcc.KeyboardLayout, layout.upper(), None)
         if value is None:
-            log.warning("Unknown keyboard layout: %s, falling back to US" % layout)
+            log.warning(u'Unknown keyboard layout: %s, falling back to US' % layout)
             value = gcc.KeyboardLayout.US
         self._mcsLayer._clientSettings.CS_CORE.kbdLayout.value = value
 
@@ -518,7 +990,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
         """
         value = getattr(gcc.KeyboardType, keyboard_type.upper(), None)
         if value is None:
-            log.warning("Unknown keyboard type: %s, falling back to IBM_101_102_KEYS" % keyboard_type)
+            log.warning(u'Unknown keyboard type: %s, falling back to IBM_101_102_KEYS' % keyboard_type)
             value = gcc.KeyboardType.IBM_101_102_KEYS
         self._mcsLayer._clientSettings.CS_CORE.keyboardType.value = value
 
@@ -691,21 +1163,24 @@ class RDPClientController(pdu.layer.PDUClientListener):
         @summary: Call when PDU layer is connected
         """
         self._isReady = True
-        import time as _time
-        self._connectedAt = _time.time()
+        from time import time
+        self._connectedAt = time()
+        size = self.getServerDesktopSize()
+        if size:
+            self._railLayer.desktopSize = size
         from twisted.internet import reactor
         if self._gfxEnabled:
             # Start GFX input gating: suppress input until CAPS_CONFIRM or timeout
             self._gfxPending = True
             self._gfxTimer = reactor.callLater(5, self._onGfxTimeout)
-        log.debug("RDPClientController: GFX input gating active (5s timeout)")
+        log.debug(u'RDPClientController: GFX input gating active (5s timeout)')
         #signal all listener
         for observer in self._clientObserver:
             observer.onReady()
 
     def _onGfxCapsConfirm(self):
         """Called by DrdynvcLayer when RDPGFX CAPS_CONFIRM is received."""
-        log.debug("RDPClientController: GFX CAPS_CONFIRM received, enabling input")
+        log.debug(u'RDPClientController: GFX CAPS_CONFIRM received, enabling input')
         self._gfxPending = False
         if self._gfxTimer and self._gfxTimer.active():
             self._gfxTimer.cancel()
@@ -713,7 +1188,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
 
     def _onGfxTimeout(self):
         """Fallback: enable input after timeout even without CAPS_CONFIRM."""
-        log.debug("RDPClientController: GFX timeout, enabling input")
+        log.debug(u'RDPClientController: GFX timeout, enabling input')
         self._gfxPending = False
         self._gfxTimer = None
 
@@ -737,6 +1212,9 @@ class RDPClientController(pdu.layer.PDUClientListener):
             self._gfxTimer.cancel()
             self._gfxTimer = None
         self._rdpsndLayer._stopAudio()
+        self._disp.shutdown()
+        self._railLayer.close()
+        self._stopUsb()
         self._drdynvcLayer.shutdown()
         self._rdpdrLayer.shutdown()
         for observer in self._clientObserver:
@@ -748,14 +1226,14 @@ class RDPClientController(pdu.layer.PDUClientListener):
         Extracts routing token and closes connection to trigger redirect reconnection.
         @param redirPDU: ServerRedirectionPDU object
         """
-        log.debug("Server redirection received, flags=0x%x" % redirPDU.redirFlags.value)
+        log.debug(u'Server redirection received, flags=0x%x' % redirPDU.redirFlags.value)
         lbInfo = redirPDU.getLoadBalanceInfo()
         if lbInfo:
-            log.debug("Load balance info: %s" % repr(lbInfo))
+            log.debug(u'Load balance info: %s' % repr(lbInfo))
             self._redirectRoutingToken = lbInfo
             self.close()
         else:
-            log.warning("Server redirection PDU received but no load balance info found")
+            log.warning(u'Server redirection PDU received but no load balance info found')
 
     def sendPointerEvent(self, x, y, button, isPressed):
         """
@@ -767,23 +1245,22 @@ class RDPClientController(pdu.layer.PDUClientListener):
         """
         if not self._isReady or self._gfxPending:
             return
-
+        # FreeRDP freerdp_client_send_button_event: the advanced input channel first
+        if self._ainput.sendPointer(x, y, button, isPressed):
+            return
         try:
             if button == 4 or button == 5:
                 event = pdu.data.PointerExEvent()
                 if isPressed:
                     event.pointerFlags.value |= pdu.data.PointerExFlag.PTRXFLAGS_DOWN
-
                 if button == 4:
                     event.pointerFlags.value |= pdu.data.PointerExFlag.PTRXFLAGS_BUTTON1
                 elif button == 5:
                     event.pointerFlags.value |= pdu.data.PointerExFlag.PTRXFLAGS_BUTTON2
-
             else:
                 event = pdu.data.PointerEvent()
                 if isPressed:
                     event.pointerFlags.value |= pdu.data.PointerFlag.PTRFLAGS_DOWN
-
                 if button == 1:
                     event.pointerFlags.value |= pdu.data.PointerFlag.PTRFLAGS_BUTTON1
                 elif button == 2:
@@ -792,16 +1269,14 @@ class RDPClientController(pdu.layer.PDUClientListener):
                     event.pointerFlags.value |= pdu.data.PointerFlag.PTRFLAGS_BUTTON3
                 else:
                     event.pointerFlags.value |= pdu.data.PointerFlag.PTRFLAGS_MOVE
-
             # position
             event.xPos.value = x
             event.yPos.value = y
-
             # send proper event
             self._pduLayer.sendInputEvents([event])
 
         except InvalidValue:
-            log.debug("try send pointer event with incorrect position")
+            log.debug(u'try send pointer event with incorrect position')
 
     def sendWheelEvent(self, x, y, scroll, isHorizontal=False):
         """
@@ -813,6 +1288,9 @@ class RDPClientController(pdu.layer.PDUClientListener):
         """
         if not self._isReady or self._gfxPending:
             return
+        # FreeRDP freerdp_client_send_wheel_event: the advanced input channel first
+        if self._ainput.sendWheel(scroll, isHorizontal):
+            return
 
         try:
             event = pdu.data.PointerEvent()
@@ -820,24 +1298,20 @@ class RDPClientController(pdu.layer.PDUClientListener):
                 event.pointerFlags.value |= pdu.data.PointerFlag.PTRFLAGS_HWHEEL
             else:
                 event.pointerFlags.value |= pdu.data.PointerFlag.PTRFLAGS_WHEEL
-
             if scroll < 0:
                 event.pointerFlags.value |= pdu.data.PointerFlag.PTRFLAGS_WHEEL_NEGATIVE
-
             # Match grdp: uint8 cast of signed value gives 256-complement for negatives
             # e.g. scroll=-1 → ts=255 (0xFF), scroll=1 → ts=1
             ts = scroll & 0xFF
             event.pointerFlags.value |= (pdu.data.PointerFlag.WheelRotationMask & ts)
-
             #position
             event.xPos.value = x
             event.yPos.value = y
-
             #send proper event
             self._pduLayer.sendInputEvents([event])
 
         except InvalidValue:
-            log.debug("try send wheel event with incorrect position")
+            log.debug(u'try send wheel event with incorrect position')
 
     def sendKeyEventScancode(self, code, isPressed, extended=False):
         """
@@ -862,7 +1336,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
             self._pduLayer.sendInputEvents([event])
 
         except InvalidValue:
-            log.debug("try send bad key event")
+            log.debug(u'try send bad key event')
 
     def sendKeyEventUnicode(self, code, isPressed):
         """
@@ -883,7 +1357,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
             self._pduLayer.sendInputEvents([event])
 
         except InvalidValue:
-            log.debug("try send bad key event")
+            log.debug(u'try send bad key event')
 
     def sendRefreshOrder(self, left, top, right, bottom):
         """
@@ -906,9 +1380,9 @@ class RDPClientController(pdu.layer.PDUClientListener):
         """
         @summary: Close protocol stack
         """
-        import traceback
-        log.debug("RDPClientController.close() called from:\n%s" %
-                  "".join(traceback.format_stack()))
+        from traceback import format_stack
+        log.debug(u'RDPClientController.close() called from:\n%s' %
+                  u''.join(format_stack()))
         if getattr(self, '_closing', False):
             return
         self._closing = True
@@ -920,10 +1394,16 @@ class RDPClientController(pdu.layer.PDUClientListener):
         self._isReady = False
         try:
             self._rdpsndLayer._stopAudio()
+            self._disp.shutdown()
+            self._stopUsb()
+            self._rdpecam.shutdown()
+            self._rdp2tcpLayer.close()
+            self._video.shutdown()
+            self._tsmf.shutdown()
             self._drdynvcLayer.shutdown()
             self._rdpdrLayer.shutdown()
         except Exception as e:
-            log.debug("RDPClientController.close(): %s" % e)
+            log.debug(u'RDPClientController.close(): %s' % e)
         if self._tpktLayer.transport is None:
             return  # not connected (yet)
         if not wasActive:
@@ -934,7 +1414,7 @@ class RDPClientController(pdu.layer.PDUClientListener):
             self._pduLayer.close()
         except Exception as e:
             # whatever happens, the socket must not stay open
-            log.debug("RDPClientController.close(): disconnect PDU not sent: %s" % e)
+            log.debug(u'RDPClientController.close(): disconnect PDU not sent: %s' % e)
             self._tpktLayer.abort()
 
     def isConnected(self):
@@ -1008,7 +1488,7 @@ class RDPServerController(pdu.layer.PDUServerListener):
         """
         @return: name of client (information done by RDP)
         """
-        return self._mcsLayer._clientSettings.CS_CORE.clientName.value.decode("utf-8").strip("\x00")
+        return self._mcsLayer._clientSettings.CS_CORE.clientName.value.decode(u'utf-8').strip(u'\x00')
 
     def getUsername(self):
         """
@@ -1193,7 +1673,7 @@ class ClientFactory(layer.RawLayerClientFactory):
         @param addr: destination address
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "buildObserver", "ClientFactory"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'buildObserver', u'ClientFactory'))
 
 
 class ServerFactory(layer.RawLayerServerFactory):
@@ -1239,7 +1719,7 @@ class ServerFactory(layer.RawLayerServerFactory):
         @param addr: destination address
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "buildObserver", "ServerFactory"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'buildObserver', u'ServerFactory'))
 
 
 class RDPClientObserver(object):
@@ -1258,14 +1738,15 @@ class RDPClientObserver(object):
         """
         @summary: Stack is ready and connected
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "onReady", "RDPClientObserver"))
+        raise CallPureVirtualFuntion(
+            u'%s:%s defined by interface %s' % (self.__class__, u'onReady', u'RDPClientObserver'))
 
     def onSessionReady(self):
         """
         @summary: Windows session is ready
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "onSessionReady", "RDPClientObserver"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'onSessionReady', u'RDPClientObserver'))
 
     def onLoginScreen(self):
         """
@@ -1305,6 +1786,14 @@ class RDPClientObserver(object):
         ('upload') or writing it ('download'). Optional; drive thread.
         """
 
+    def onPrintJob(self, printerName, title, totalBytes, destination, error):
+        """
+        @summary: A document printed on the server went to a redirected printer.
+        Optional; printer thread.
+        @param destination: {str|None} where it went (CUPS job, file...)
+        @param error: {str|None} why it could not be printed
+        """
+
     def onLogonError(self, errorType, errorData, message):
         """
         @summary: The server reported a logon error / warning. Optional.
@@ -1317,7 +1806,8 @@ class RDPClientObserver(object):
         """
         @summary: Stack is closes
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "onClose", "RDPClientObserver"))
+        raise CallPureVirtualFuntion(
+            u'%s:%s defined by interface %s' % (self.__class__, u'onClose', u'RDPClientObserver'))
 
     def onUpdate(self, destLeft, destTop, destRight, destBottom, width, height, bitsPerPixel, isCompress, data):
         """
@@ -1333,7 +1823,7 @@ class RDPClientObserver(object):
         @param data: bitmap data
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "onUpdate", "RDPClientObserver"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'onUpdate', u'RDPClientObserver'))
 
     def onGfxSurface(self, dest_x, dest_y, width, height, surf_buf, surf_w, src_left, src_top):
         """Fast-path AVC delivery: a region of *surf_buf* (bytearray) has been
@@ -1342,7 +1832,7 @@ class RDPClientObserver(object):
         ``surf_w * 4`` bytes.  Override to create a QImage with stride instead
         of calling onUpdate with bytes — avoids the tobytes() copy.
         """
-        pass  # default: no-op; subclasses override for zero-copy delivery
+        # Default: no-op; subclasses override for zero-copy delivery
 
     def onPointerHide(self):
         """
@@ -1391,13 +1881,15 @@ class RDPServerObserver(object):
         @summary: Stack is ready and connected
         May be called after an setColorDepth too
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "onReady", "RDPServerObserver"))
+        raise CallPureVirtualFuntion(
+            u'%s:%s defined by interface %s' % (self.__class__, u'onReady', u'RDPServerObserver'))
 
     def onClose(self):
         """
         @summary: Stack is closes
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "onClose", "RDPClientObserver"))
+        raise CallPureVirtualFuntion(
+            u'%s:%s defined by interface %s' % (self.__class__, u'onClose', u'RDPClientObserver'))
 
     def onKeyEventScancode(self, code, isPressed, isExtended):
         """
@@ -1407,7 +1899,7 @@ class RDPServerObserver(object):
         @param isExtended: {boolean} True if a special key
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "onKeyEventScanCode", "RDPServerObserver"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'onKeyEventScanCode', u'RDPServerObserver'))
 
     def onKeyEventUnicode(self, code, isPressed):
         """
@@ -1416,7 +1908,7 @@ class RDPServerObserver(object):
         @param isPressed: True if key is down
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "onKeyEventUnicode", "RDPServerObserver"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'onKeyEventUnicode', u'RDPServerObserver'))
 
     def onPointerEvent(self, x, y, button, isPressed):
         """
@@ -1427,4 +1919,4 @@ class RDPServerObserver(object):
         @param isPressed: True if mouse button is pressed
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "onPointerEvent", "RDPServerObserver"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'onPointerEvent', u'RDPServerObserver'))

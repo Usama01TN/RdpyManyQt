@@ -14,9 +14,9 @@ from sys import path
 if dirname(__file__) not in path:
     path.append(dirname(__file__))
 
+from ManyQt.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, QComboBox, \
+    QLabel, QCheckBox, QMessageBox, QFileDialog
 from ManyQt.QtCore import pyqtSlot
-from ManyQt.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPushButton, \
-    QComboBox, QCheckBox, QLabel, QMessageBox, QFileDialog
 
 try:
     from .rdpviewer import RdpViewerWidget
@@ -35,9 +35,9 @@ class MainWindow(QMainWindow):
         :param kwargs: any
         """
         super(MainWindow, self).__init__(*args, **kwargs)
-        self.setWindowTitle(self.tr('RdpViewer demo'))
+        self.setWindowTitle(self.tr(u'RdpViewer demo'))
         self.resize(1100, 760)
-        self.__m_viewer = RdpViewerWidget(host='', port=3389, clipboardMode=RdpViewerWidget.ClipboardMode.Files,
+        self.__m_viewer = RdpViewerWidget(host=u'', port=3389, clipboardMode=RdpViewerWidget.ClipboardMode.Files,
                                           certificateMode=RdpViewerWidget.CertificateMode.Tofu,
                                           colorDepth=RdpViewerWidget.ColorDepth.Bpp32,
                                           keyboardLayout=RdpViewerWidget.KeyboardLayout.US,
@@ -51,9 +51,9 @@ class MainWindow(QMainWindow):
                                           loginScreenReached=self.onLoginScreen,
                                           desktopReached=self.onDesktop,
                                           logonFailed=self.onLogonFailed)  # type: RdpViewerWidget
-        self.__m_host = QLineEdit(placeholderText=self.tr('host[:port]'))  # type: QLineEdit
-        self.__m_user = QLineEdit(placeholderText=self.tr('user'))  # type: QLineEdit
-        self.__m_pass = QLineEdit(placeholderText=self.tr('password'))  # type: QLineEdit
+        self.__m_host = QLineEdit(placeholderText=self.tr(u'Host[:port]'))  # type: QLineEdit
+        self.__m_user = QLineEdit(placeholderText=self.tr(u'User'))  # type: QLineEdit
+        self.__m_pass = QLineEdit(placeholderText=self.tr(u'Password'))  # type: QLineEdit
         self.__m_pass.setEchoMode(QLineEdit.EchoMode.Password if hasattr(QLineEdit, 'EchoMode') else QLineEdit.Password)
         self.__m_security = QComboBox()  # type: QComboBox
         for preset in (RdpViewerWidget.SecurityPreset.Default, RdpViewerWidget.SecurityPreset.Maximum,
@@ -62,22 +62,21 @@ class MainWindow(QMainWindow):
         self.__m_depth = QComboBox()  # type: QComboBox
         for depth in reversed(list(RdpViewerWidget.ColorDepth)):
             self.__m_depth.addItem('{} bits'.format(int(depth)), int(depth))
-        self.__m_share = QPushButton(self.tr('Share folder...'))  # type: QPushButton
+        self.__m_share = QPushButton(self.tr(u'Share folder...'))  # type: QPushButton
         self.__m_share.clicked.connect(self.onShareFolder)
-        self.__m_send = QPushButton(self.tr('Send files...'))  # type: QPushButton
+        self.__m_send = QPushButton(self.tr(u'Send files...'))  # type: QPushButton
         self.__m_send.clicked.connect(self.onSendFiles)
-        self.__m_mic = QCheckBox(self.tr('microphone'))  # type: QCheckBox
-        self.__m_smart = QCheckBox(self.tr('smart sizing'))  # type: QCheckBox
+        self.__m_mic = QCheckBox(self.tr(u'Microphone'))  # type: QCheckBox
+        self.__m_smart = QCheckBox(self.tr(u'Smart sizing'))  # type: QCheckBox
         self.__m_smart.toggled.connect(self.__m_viewer.setSmartSizing)
-        self.__m_button = QPushButton(self.tr('Connect'))  # type: QPushButton
+        self.__m_button = QPushButton(self.tr(u'Connect'))  # type: QPushButton
         self.__m_button.clicked.connect(self.onConnectClicked)
-        self.__m_status = QLabel(self.tr('idle'))  # type: QLabel
+        self.__m_status = QLabel(self.tr(u'Idle'))  # type: QLabel
         self.__m_viewer.stateChanged.connect(
             lambda state: self.__m_status.setText(RdpViewerWidget.State(state).name))
         bar = QHBoxLayout()  # type: QHBoxLayout
         for w in (self.__m_host, self.__m_user, self.__m_pass, self.__m_security, self.__m_depth, self.__m_mic,
-                  self.__m_smart,
-                  self.__m_share, self.__m_send, self.__m_button, self.__m_status):
+                  self.__m_smart, self.__m_share, self.__m_send, self.__m_button, self.__m_status):
             bar.addWidget(w)
         wdg = QWidget()  # type: QWidget
         layout = QVBoxLayout(wdg)  # type: QVBoxLayout
@@ -94,7 +93,7 @@ class MainWindow(QMainWindow):
         if viewer.getState() != RdpViewerWidget.State.Idle:
             viewer.disconnectFromHost()
             return
-        host, _, port = self.__m_host.text().strip().partition(':')
+        host, _, port = self.__m_host.text().strip().partition(u':')
         viewer.setHost(host)
         viewer.setPort(int(port) if port.isdigit() else 3389)
         viewer.setUsername(self.__m_user.text())
@@ -102,7 +101,7 @@ class MainWindow(QMainWindow):
         viewer.setSecurityPreset(self.__m_security.currentData())
         viewer.setColorDepth(self.__m_depth.currentData())
         viewer.setMicrophoneEnabled(self.__m_mic.isChecked())
-        self.__m_button.setText(self.tr('Disconnect'))
+        self.__m_button.setText(self.tr(u'Disconnect'))
         viewer.connectToHost()
 
     @pyqtSlot()
@@ -110,7 +109,7 @@ class MainWindow(QMainWindow):
         """
         :return:
         """
-        folder = QFileDialog.getExistingDirectory(self, self.tr('Folder to share with the session'))
+        folder = QFileDialog.getExistingDirectory(self, self.tr(u'Folder to share with the session'))
         if folder:
             self.__m_viewer.addDrive(folder)
             self.__m_viewer.update()
@@ -120,9 +119,9 @@ class MainWindow(QMainWindow):
         """
         :return:
         """
-        paths = QFileDialog.getOpenFileNames(self, self.tr('Files to paste in the session'))[0]
+        paths = QFileDialog.getOpenFileNames(self, self.tr(u'Files to paste in the session'))[0]
         if paths and self.__m_viewer.sendFiles(paths):
-            self.__m_status.setText(self.tr('press Ctrl+V in the session'))
+            self.__m_status.setText(self.tr(u'Press Ctrl+V in the session'))
 
     def onTransferStarted(self, direction, items, total):
         """
@@ -164,14 +163,14 @@ class MainWindow(QMainWindow):
         :param total: int
         :return:
         """
-        print(self.tr('Drive {}: {} ({} bytes)').format(RdpViewerWidget.TransferDirection(direction).name, path, total))
+        print(self.tr(u'Drive {}: {} ({} bytes)').format(RdpViewerWidget.TransferDirection(direction).name, path, total))
 
     @pyqtSlot()
     def onConnected(self):
         """
         :return:
         """
-        print(self.tr('Connected'))
+        print(self.tr(u'Connected'))
         print(self.__m_viewer.getSessionReport())
 
     @pyqtSlot()
@@ -179,14 +178,14 @@ class MainWindow(QMainWindow):
         """
         :return:
         """
-        print(self.tr('Login screen displayed'))
+        print(self.tr(u'Login screen displayed'))
 
     @pyqtSlot()
     def onDesktop(self):
         """
         :return:
         """
-        print(self.tr('Logged on: desktop reached'))
+        print(self.tr(u'Logged on: desktop reached'))
 
     @pyqtSlot('QString')
     @pyqtSlot(str)
@@ -195,7 +194,7 @@ class MainWindow(QMainWindow):
         :param message: str | unicode | QString
         :return:
         """
-        print(self.tr('Logon: {}').format(message))
+        print(self.tr(u'Logon: {}').format(message))
 
     @pyqtSlot('QString')
     @pyqtSlot(str)
@@ -204,8 +203,8 @@ class MainWindow(QMainWindow):
         :param reason: str | unicode | QString
         :return:
         """
-        self.__m_button.setText(self.tr('Connect'))
-        print(self.tr('Disconnected: {}').format(reason))
+        self.__m_button.setText(self.tr(u'Connect'))
+        print(self.tr(u'Disconnected: {}').format(reason))
 
     @pyqtSlot('QString')
     @pyqtSlot(str)
@@ -214,5 +213,5 @@ class MainWindow(QMainWindow):
         :param reason: str | unicode | QString
         :return:
         """
-        self.__m_button.setText(self.tr('Connect'))
-        QMessageBox.warning(self, self.tr('Connection failed'), reason)
+        self.__m_button.setText(self.tr(u'Connect'))
+        QMessageBox.warning(self, self.tr(u'Connection failed'), reason)

@@ -108,6 +108,16 @@ jobs:
           restore-keys: |
             cibw-${{ matrix.name }}-${{ steps.cibw.outputs.version }}-partial-
             cibw-${{ matrix.name }}-
+      # Android wheels are tested in an emulator, which needs KVM (cibuildwheel docs); iOS
+      # wheels in the simulator of the macOS runner. tools/cibw.py installs their NumPy /
+      # PyAV from Flet's index where it has them and skips the other tests (see pyproject.toml)
+      - name: Enable KVM for the Android emulator
+        if: matrix.platform == 'android'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
       # tools/cibw.py: cibuildwheel with downloads retried for 15 minutes (mirrors for GitHub
       # release files, checksums verified) and the run restarted after a network error
       - name: Build wheels

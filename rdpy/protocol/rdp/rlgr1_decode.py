@@ -5,7 +5,7 @@
 # version that shadows this module when compiled.
 #
 from __future__ import absolute_import, division, print_function
-import numpy as np
+from numpy import int16, zeros
 
 # RLGR1 constants (matching FreeRDP/grdp)
 _LSGR = 3
@@ -104,9 +104,9 @@ class _BitReader(object):
 def rlgr1_decode(data, output_size):
     """Decode RLGR1 encoded data into signed 16-bit DWT coefficients."""
     if data is None or len(data) == 0:
-        return np.zeros(output_size, dtype=np.int16)
+        return zeros(output_size, dtype=int16)
     br = _BitReader(data)
-    output = np.zeros(output_size, dtype=np.int16)
+    output = zeros(output_size, dtype=int16)
     cnt = 0
     k = 1
     kp = 1 << _LSGR  # 8

@@ -26,7 +26,6 @@ Connection security, modeled on FreeRDP's rdpSettings:
 * IgnoreCertificate and the certificate policy (FreeRDP /cert:ignore|tofu|deny):
   the server's TLS certificate is checked during the TLS handshake, before
   any credential is sent.
-
     ignore  accept any certificate (not recommended)
     tofu    trust on first use: a certificate signed by a trusted authority
             for this host name is accepted; otherwise the first certificate
@@ -36,17 +35,16 @@ Connection security, modeled on FreeRDP's rdpSettings:
             name, is accepted (self-signed certificates are refused)
 """
 from __future__ import absolute_import, division, print_function
-
-import fnmatch
-import hashlib
-import ipaddress
-import os
-import ssl as _pyssl
-import sys
-import threading
-
-import rdpy.core.log as log
+from os.path import dirname, expanduser, isdir, join
+from ssl import create_default_context
 from rdpy.core.compat import replace
+from os import environ, makedirs
+from ipaddress import ip_address
+from fnmatch import fnmatchcase
+from threading import Lock
+from hashlib import sha256
+from sys import platform
+from rdpy.core import log
 # MS-RDPBCGR requestedProtocols
 PROTOCOL_RDP = 0x00000000
 PROTOCOL_SSL = 0x00000001
@@ -124,18 +122,18 @@ class SecuritySettings(object):
 
 def knownHostsPath():
     """~/.config/rdpymanyqt/known_hosts (%APPDATA%\\rdpymanyqt\\known_hosts on Windows)"""
-    if sys.platform == 'win32':
-        base = os.environ.get('APPDATA') or os.path.expanduser('~')
+    if platform == 'win32':
+        base = environ.get('APPDATA') or expanduser('~')
     else:
-        base = os.environ.get('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config')
-    return os.path.join(base, 'rdpymanyqt', 'known_hosts')
+        base = environ.get('XDG_CONFIG_HOME') or join(expanduser('~'), '.config')
+    return join(base, 'rdpymanyqt', 'known_hosts')
 
 
 class KnownHosts(object):
     """
     @summary: host port sha256-fingerprint lines (like FreeRDP's known_hosts2)
     """
-    _lock = threading.Lock()
+    _lock = Lock()
 
     def __init__(self, path=None):
         self.path = path or knownHostsPath()
@@ -159,9 +157,9 @@ class KnownHosts(object):
         with self._lock:
             entries = self._load()
             entries[(host.lower(), str(port))] = fingerprint
-            folder = os.path.dirname(self.path)
-            if folder and not os.path.isdir(folder):
-                os.makedirs(folder)
+            folder = dirname(self.path)
+            if folder and not isdir(folder):
+                makedirs(folder)
             tmp = self.path + '.tmp'
             with open(tmp, 'w') as f:
                 f.write('# host port sha256 - certificates trusted by rdpymanyqt\n')
@@ -178,7 +176,7 @@ def fingerprint(x509):
     """SHA-256 fingerprint AA:BB:... of a pyOpenSSL X509"""
     from OpenSSL import crypto
     der = crypto.dump_certificate(crypto.FILETYPE_ASN1, x509)
-    return ':'.join('%02X' % b for b in bytearray(hashlib.sha256(der).digest()))
+    return ':'.join('%02X' % b for b in bytearray(sha256(der).digest()))
 
 
 def certificateNames(x509):
@@ -186,12 +184,12 @@ def certificateNames(x509):
     dns, ips = [], []
     try:
         c = x509.to_cryptography()
-        from cryptography import x509 as cx
+        from cryptography.x509 import SubjectAlternativeName, DNSName, IPAddress, ExtensionNotFound
         try:
-            san = c.extensions.get_extension_for_class(cx.SubjectAlternativeName).value
-            dns = [n.lower() for n in san.get_values_for_type(cx.DNSName)]
-            ips = [str(a) for a in san.get_values_for_type(cx.IPAddress)]
-        except cx.ExtensionNotFound:
+            san = c.extensions.get_extension_for_class(SubjectAlternativeName).value
+            dns = [n.lower() for n in san.get_values_for_type(DNSName)]
+            ips = [str(a) for a in san.get_values_for_type(IPAddress)]
+        except ExtensionNotFound:
             pass
     except Exception:
         pass
@@ -203,7 +201,7 @@ def hostnameMatches(x509, host):
     """RFC 6125: SAN names (or the CN when there is no SAN) must match host."""
     dns, ips, cn = certificateNames(x509)
     try:
-        ip = str(ipaddress.ip_address(host))
+        ip = str(ip_address(host))
         return ip in ips
     except ValueError:
         pass
@@ -211,7 +209,7 @@ def hostnameMatches(x509, host):
     names = dns or ([cn] if cn else [])
     for name in names:
         if name == host or (name.startswith('*.') and '.' in host and
-                            fnmatch.fnmatchcase(host, name) and host.count('.') == name.count('.')):
+                            fnmatchcase(host, name) and host.count('.') == name.count('.')):
             return True
     # Windows RDP certificates are issued to the computer name: accept the
     # short name when connecting with the fully qualified one and vice versa
@@ -222,7 +220,7 @@ def hostnameMatches(x509, host):
 def _systemCertificates():
     """Trusted root certificates of the system (works on Windows too)."""
     try:
-        ctx = _pyssl.create_default_context()
+        ctx = create_default_context()
         ctx.load_default_certs()
         return ctx.get_ca_certs(binary_form=True)
     except Exception:
@@ -283,7 +281,7 @@ class CertificateVerifier(object):
         fp = fingerprint(x509)
         nameOk = hostnameMatches(x509, self.host)
         if chainOk and nameOk:
-            log.debug("certificate of %s verified by a trusted authority" % self.host)
+            log.debug(u'certificate of %s verified by a trusted authority' % self.host)
             return True
         why = []
         if not chainOk:
@@ -293,20 +291,20 @@ class CertificateVerifier(object):
             why.append('issued to "%s", not to "%s"' % (x509.get_subject().CN, self.host))
         problem = ' and '.join(w for w in why if w)
         if self.mode == CERT_DENY:
-            self.rejection = "server certificate refused (%s); use --cert tofu or --cert ignore to " \
-                             "connect anyway" % problem
-            log.error(self.rejection + "\n  SHA-256 %s" % fp)
+            self.rejection = u'server certificate refused (%s); use --cert tofu or --cert ignore to ' \
+                             u'connect anyway' % problem
+            log.error(self.rejection + u'\n  SHA-256 %s' % fp)
             return False
         known = self.knownHosts.get(self.host, self.port)
         if known is None:
             self.knownHosts.set(self.host, self.port, fp)
-            log.warning("certificate of %s:%s is %s: trusted on first use and remembered in %s\n"
-                        "  SHA-256 %s" % (self.host, self.port, problem, self.knownHosts.path, fp))
+            log.warning(u'certificate of %s:%s is %s: trusted on first use and remembered in %s\n'
+                        u'  SHA-256 %s' % (self.host, self.port, problem, self.knownHosts.path, fp))
             return True
         if known == fp:
             return True
-        self.rejection = ("the certificate of %s:%s CHANGED since the last connection - possible "
-                          "man-in-the-middle attack. New SHA-256 %s, trusted %s" %
+        self.rejection = (u'the certificate of %s:%s CHANGED since the last connection - possible '
+                          u'man-in-the-middle attack. New SHA-256 %s, trusted %s' %
                           (self.host, self.port, fp, known))
         log.error(self.rejection)
         return False

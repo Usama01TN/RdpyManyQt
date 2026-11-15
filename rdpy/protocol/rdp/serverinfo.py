@@ -17,12 +17,10 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 What the client learns about the server while it connects - no extra
 connection is made (same report as PyFreeRdpApp's getServerInfo /
 getSessionInfo):
-
 * the Windows version and build, NetBIOS/DNS names and the server clock,
   from the NTLM CHALLENGE of the NLA exchange (MS-NLMP 2.2.1.2),
 * the logged-on user and session id, from Save Session Info (MS-RDPBCGR 2.2.10.1),
@@ -30,10 +28,9 @@ getSessionInfo):
 * the TLS certificate: subject, issuer, validity, fingerprints, alternative names.
 """
 from __future__ import absolute_import, division, print_function
-
-import hashlib
-import struct
 from datetime import datetime, timedelta
+from struct import error, unpack_from
+from hashlib import sha1, sha256
 from rdpy.core.compat import utc
 
 # MS-RDPBCGR 2.2.1.1.1 selectedProtocol
@@ -44,7 +41,6 @@ PROTOCOL_HYBRID_EX = 0x00000008
 PROTOCOL_RDSAAD = 0x00000010
 _PROTOCOL_NAMES = ((PROTOCOL_RDSAAD, u'Azure AD (RDSAAD)'), (PROTOCOL_HYBRID_EX, u'NLA with early user auth'),
                    (PROTOCOL_HYBRID, u'NLA (CredSSP)'), (PROTOCOL_RDSTLS, u'RDSTLS'), (PROTOCOL_SSL, u'TLS'))
-
 # MS-RDPBCGR 2.2.1.4.2 server core data version
 RDP_VERSIONS = {
     0x00080001: u'4.0', 0x00080004: u'5.0 - 8.1', 0x00080005: u'10.0', 0x00080006: u'10.1',
@@ -52,7 +48,6 @@ RDP_VERSIONS = {
     0x0008000B: u'10.6', 0x0008000C: u'10.7', 0x0008000D: u'10.8', 0x0008000E: u'10.9',
     0x0008000F: u'10.10', 0x00080010: u'10.11', 0x00080011: u'10.12',
 }
-
 # MS-RDPEGFX 2.2.3 capability versions
 RDP_GFX_VERSIONS = {
     0x00080004: u'8.0', 0x00080105: u'8.1', 0x000A0002: u'10.0', 0x000A0100: u'10.1',
@@ -110,15 +105,15 @@ def parseChallenge(data):
         return {}
     msg = data[start:]
     info = {}
-    if len(msg) >= 56 and struct.unpack_from('<I', msg, 20)[0] & 0x02000000:  # NEGOTIATE_VERSION
-        major, minor, build = struct.unpack_from('<BBH', msg, 48)
+    if len(msg) >= 56 and unpack_from('<I', msg, 20)[0] & 0x02000000:  # NEGOTIATE_VERSION
+        major, minor, build = unpack_from('<BBH', msg, 48)
         info.update(osVersion=u'%d.%d.%d' % (major, minor, build), osName=windowsName(major, minor, build))
     if len(msg) >= 48:
-        length, _maxLength, offset = struct.unpack_from('<HHI', msg, 40)
+        length, _maxLength, offset = unpack_from('<HHI', msg, 40)
         pairs = msg[offset:offset + length]
         position = 0
         while position + 4 <= len(pairs):
-            avId, avLength = struct.unpack_from('<HH', pairs, position)
+            avId, avLength = unpack_from('<HH', pairs, position)
             value = pairs[position + 4:position + 4 + avLength]
             position += 4 + avLength
             if avId == 0:
@@ -126,7 +121,7 @@ def parseChallenge(data):
             if avId in _AV_NAMES:
                 info[_AV_NAMES[avId]] = value.decode('utf-16-le', 'replace')
             elif avId == _AV_TIMESTAMP and avLength == 8:
-                info[u'serverTime'] = filetimeToText(struct.unpack_from('<Q', value)[0])
+                info[u'serverTime'] = filetimeToText(unpack_from('<Q', value)[0])
     return info
 
 
@@ -137,18 +132,18 @@ def parseLogonInfo(infoType, data):
     """
     try:
         if infoType == INFOTYPE_LOGON and len(data) >= 576:
-            cbDomain = struct.unpack_from('<I', data, 0)[0]
+            cbDomain = unpack_from('<I', data, 0)[0]
             domain = data[4:4 + min(cbDomain, 52)]
-            cbUser = struct.unpack_from('<I', data, 56)[0]
+            cbUser = unpack_from('<I', data, 56)[0]
             user = data[60:60 + min(cbUser, 512)]
-            sessionId = struct.unpack_from('<I', data, 572)[0]
+            sessionId = unpack_from('<I', data, 572)[0]
             return {u'domain': _utf16(domain), u'user': _utf16(user), u'sessionId': sessionId}
         if infoType == INFOTYPE_LOGON_LONG and len(data) >= 576:
-            sessionId, cbDomain, cbUser = struct.unpack_from('<III', data, 6)
+            sessionId, cbDomain, cbUser = unpack_from('<III', data, 6)
             domain = data[576:576 + cbDomain]
             user = data[576 + cbDomain:576 + cbDomain + cbUser]
             return {u'domain': _utf16(domain), u'user': _utf16(user), u'sessionId': sessionId}
-    except struct.error:
+    except error:
         pass
     return {}
 
@@ -173,17 +168,17 @@ def parseLogonErrors(data):
     @return: {tuple|None} (errorType, errorData, message)
     """
     try:
-        _length, present = struct.unpack_from('<HI', data, 0)
+        _length, present = unpack_from('<HI', data, 0)
         offset = 6
         if present & LOGON_EX_AUTORECONNECTCOOKIE:
-            size = struct.unpack_from('<I', data, offset)[0]
+            size = unpack_from('<I', data, offset)[0]
             offset += 4 + size
         if present & LOGON_EX_LOGONERRORS:
-            _size, errorType, errorData = struct.unpack_from('<III', data, offset)
+            _size, errorType, errorData = unpack_from('<III', data, offset)
             message = u'%s: %s' % (LOGON_ERROR_TYPES.get(errorType, u'logon error 0x%08X' % errorType),
                                    LOGON_ERROR_DATA.get(errorData, u'0x%08X' % errorData))
             return errorType, errorData, message
-    except struct.error:
+    except error:
         pass
     return None
 
@@ -229,8 +224,8 @@ def describeCertificate(cert):
     info[u'validity'] = (u'EXPIRED %s ago' if info[u'expired'] else u'expires in %s') % \
         humanDuration(abs(remaining.total_seconds()))
     der = c.public_bytes(serialization.Encoding.DER)
-    info[u'sha256'] = u':'.join(u'%02X' % b for b in bytearray(hashlib.sha256(der).digest()))
-    info[u'sha1'] = u':'.join(u'%02X' % b for b in bytearray(hashlib.sha1(der).digest()))
+    info[u'sha256'] = u':'.join(u'%02X' % b for b in bytearray(sha256(der).digest()))
+    info[u'sha1'] = u':'.join(u'%02X' % b for b in bytearray(sha1(der).digest()))
     try:
         info[u'signature'] = c.signature_hash_algorithm.name
     except Exception:

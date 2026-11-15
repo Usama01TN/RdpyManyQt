@@ -5,10 +5,10 @@
 # Ported from grdp Go implementation (commit 6d4735c).
 #
 from __future__ import absolute_import, division, print_function
-import struct
-import numpy as np
-import rdpy.core.log as log
+from numpy import arange, array, clip, cumsum, empty, frombuffer, int16, int32, newaxis, repeat, uint8, vstack, zeros
+from struct import unpack_from
 from rdpy.protocol.rdp.rlgr1_decode import rlgr1_decode
+from rdpy.core import log
 
 # Progressive block types
 PROG_WBT_SYNC = 0xCCC0
@@ -21,7 +21,7 @@ PROG_WBT_TILE_FIRST = 0xCCC6
 PROG_WBT_TILE_UPGRADE = 0xCCC7
 RFX_TILE_SIZE = 64
 # Pre-built index array for full 64×64 tiles — avoids np.arange() per tile call.
-_FULL_TILE_COEFF_IDX = np.arange(RFX_TILE_SIZE * RFX_TILE_SIZE, dtype=np.int32)
+_FULL_TILE_COEFF_IDX = arange(RFX_TILE_SIZE * RFX_TILE_SIZE, dtype=int32)
 # Sub-band sizes in RLGR decode order:
 # HL1(1024) LH1(1024) HH1(1024) HL2(256) LH2(256) HH2(256) HL3(64) LH3(64) HH3(64) LL3(64)
 _SUBBAND_SIZES = [1024, 1024, 1024, 256, 256, 256, 64, 64, 64, 64]
@@ -256,54 +256,54 @@ def _idwt_2d_level(buf, n):
     size = 2 * n
 
     # Extract subbands as int32 2D arrays
-    hl = buf[0:nn].astype(np.int32).reshape(n, n)
-    lh = buf[nn:2 * nn].astype(np.int32).reshape(n, n)
-    hh = buf[2 * nn:3 * nn].astype(np.int32).reshape(n, n)
-    ll = buf[3 * nn:4 * nn].astype(np.int32).reshape(n, n)
+    hl = buf[0:nn].astype(int32).reshape(n, n)
+    lh = buf[nn:2 * nn].astype(int32).reshape(n, n)
+    hh = buf[2 * nn:3 * nn].astype(int32).reshape(n, n)
+    ll = buf[3 * nn:4 * nn].astype(int32).reshape(n, n)
 
     # --- Step 1: Horizontal IDWT (all rows at once) ---
     # Stack L-part and H-part: rows 0..n-1 use (ll,hl), rows n..2n-1 use (lh,hh)
-    lo = np.vstack([ll, lh])  # (2n, n)
-    hi = np.vstack([hl, hh])  # (2n, n)
+    lo = vstack([ll, lh])  # (2n, n)
+    hi = vstack([hl, hh])  # (2n, n)
 
     # Even positions (undo update step); compute in int32, then truncate to int16 (matching grdp)
-    even_h = np.empty((2 * n, n), dtype=np.int32)
+    even_h = empty((2 * n, n), dtype=int32)
     even_h[:, 0] = lo[:, 0] - ((hi[:, 0] * 2 + 1) >> 1)
     even_h[:, 1:] = lo[:, 1:] - ((hi[:, :-1] + hi[:, 1:] + 1) >> 1)
-    even_h_i16 = even_h.astype(np.int16)
-    even_h_i32 = even_h_i16.astype(np.int32)  # sign-extended truncated values
+    even_h_i16 = even_h.astype(int16)
+    even_h_i32 = even_h_i16.astype(int32)  # sign-extended truncated values
 
     # Odd positions — both neighbours are read from int16 tmp (both truncated, matching grdp)
-    odd_h = np.empty((2 * n, n), dtype=np.int32)
+    odd_h = empty((2 * n, n), dtype=int32)
     odd_h[:, :-1] = (hi[:, :-1] << 1) + ((even_h_i32[:, :-1] + even_h_i32[:, 1:]) >> 1)
     odd_h[:, -1] = (hi[:, -1] << 1) + even_h_i32[:, -1]
 
     # Interleave even/odd into tmp as int16 (matching grdp's int16 tmp buffer)
-    tmp = np.empty((2 * n, size), dtype=np.int16)
+    tmp = empty((2 * n, size), dtype=int16)
     tmp[:, 0::2] = even_h_i16
-    tmp[:, 1::2] = odd_h.astype(np.int16)
+    tmp[:, 1::2] = odd_h.astype(int16)
 
     # --- Step 2: Vertical IDWT (all columns at once) ---
-    lo_v = tmp[:n, :].astype(np.int32)  # L rows (sign-extended from int16)
-    hi_v = tmp[n:, :].astype(np.int32)  # H rows (sign-extended from int16)
+    lo_v = tmp[:n, :].astype(int32)  # L rows (sign-extended from int16)
+    hi_v = tmp[n:, :].astype(int32)  # H rows (sign-extended from int16)
 
     # Even rows; compute in int32, then truncate to int16 (matching grdp)
-    even_v = np.empty((n, size), dtype=np.int32)
+    even_v = empty((n, size), dtype=int32)
     even_v[0, :] = lo_v[0, :] - ((hi_v[0, :] * 2 + 1) >> 1)
     even_v[1:, :] = lo_v[1:, :] - ((hi_v[:-1, :] + hi_v[1:, :] + 1) >> 1)
-    even_v_i16 = even_v.astype(np.int16)
-    even_v_i32 = even_v_i16.astype(np.int32)  # sign-extended truncated values
+    even_v_i16 = even_v.astype(int16)
+    even_v_i32 = even_v_i16.astype(int32)  # sign-extended truncated values
 
     # Odd rows — prevEven (even[row-1]) is truncated; current even[row] is not yet truncated
     # (matches grdp: prevEven = int32(buf[prev]) is truncated, even = local int32 is not)
-    odd_v = np.empty((n, size), dtype=np.int32)
+    odd_v = empty((n, size), dtype=int32)
     odd_v[:-1, :] = (hi_v[:-1, :] << 1) + ((even_v_i32[:-1, :] + even_v[1:, :]) >> 1)
     odd_v[-1, :] = (hi_v[-1, :] << 1) + even_v_i32[-1, :]
 
     # Interleave even/odd into output as int16
-    out = np.empty((size, size), dtype=np.int16)
+    out = empty((size, size), dtype=int16)
     out[0::2, :] = even_v_i16
-    out[1::2, :] = odd_v.astype(np.int16)
+    out[1::2, :] = odd_v.astype(int16)
 
     buf[:size * size] = out.reshape(-1)
 
@@ -458,7 +458,7 @@ def _dwt_2d_decode_block(buffer, temp, level):
 
 
 def _inverse_dwt_extrapolate(buffer):
-    temp = np.zeros(4096, dtype=np.int16)
+    temp = zeros(4096, dtype=int16)
     _dwt_2d_decode_block(buffer[3807:], temp, 3)
     _dwt_2d_decode_block(buffer[3007:], temp, 2)
     _dwt_2d_decode_block(buffer[0:], temp, 1)
@@ -483,18 +483,18 @@ def _decode_component(data, shift, prev_dequant=None, is_diff=False, extrapolate
         coeffs = rlgr1_decode(data, TILE_PIXELS)
         raw_sign = coeffs.copy()
     else:
-        coeffs = np.zeros(TILE_PIXELS, dtype=np.int16)
-        raw_sign = np.zeros(TILE_PIXELS, dtype=np.int16)
+        coeffs = zeros(TILE_PIXELS, dtype=int16)
+        raw_sign = zeros(TILE_PIXELS, dtype=int16)
 
     if not extrapolate:
         # Differential decode LL3 (positions 4032..4095)
-        coeffs[4032:4096] = np.cumsum(coeffs[4032:4096], dtype=np.int16)
-        shift_arr = np.repeat(np.array(shift.subband_shifts(), dtype=np.int16), _SUBBAND_SIZES)
+        coeffs[4032:4096] = cumsum(coeffs[4032:4096], dtype=int16)
+        shift_arr = repeat(array(shift.subband_shifts(), dtype=int16), _SUBBAND_SIZES)
         coeffs <<= shift_arr
     else:
         # Differential decode LL3 (positions 4015..4095)
-        coeffs[4015:4096] = np.cumsum(coeffs[4015:4096], dtype=np.int16)
-        shift_arr = np.repeat(np.array(shift.subband_shifts(), dtype=np.int16), _SUBBAND_SIZES_EXT)
+        coeffs[4015:4096] = cumsum(coeffs[4015:4096], dtype=int16)
+        shift_arr = repeat(array(shift.subband_shifts(), dtype=int16), _SUBBAND_SIZES_EXT)
         coeffs <<= shift_arr
 
     if is_diff and prev_dequant is not None:
@@ -523,16 +523,16 @@ def _place_tile_abs(y_coeffs, cb_coeffs, cr_coeffs, tile_x, tile_y, output, out_
 
     # Build flat index into 64-wide coefficient arrays
     if tile_w == RFX_TILE_SIZE and tile_h == RFX_TILE_SIZE:
-        y_arr = y_coeffs.astype(np.int32)
-        cb_arr = cb_coeffs.astype(np.int32)
-        cr_arr = cr_coeffs.astype(np.int32)
+        y_arr = y_coeffs.astype(int32)
+        cb_arr = cb_coeffs.astype(int32)
+        cr_arr = cr_coeffs.astype(int32)
     else:
-        rows = np.arange(tile_h, dtype=np.int32)
-        cols = np.arange(tile_w, dtype=np.int32)
-        coeff_idx = (rows[:, np.newaxis] * RFX_TILE_SIZE + cols[np.newaxis, :]).ravel()
-        y_arr = y_coeffs[coeff_idx].astype(np.int32)
-        cb_arr = cb_coeffs[coeff_idx].astype(np.int32)
-        cr_arr = cr_coeffs[coeff_idx].astype(np.int32)
+        rows = arange(tile_h, dtype=int32)
+        cols = arange(tile_w, dtype=int32)
+        coeff_idx = (rows[:, newaxis] * RFX_TILE_SIZE + cols[newaxis, :]).ravel()
+        y_arr = y_coeffs[coeff_idx].astype(int32)
+        cb_arr = cb_coeffs[coeff_idx].astype(int32)
+        cr_arr = cr_coeffs[coeff_idx].astype(int32)
 
     # ICT (BT.601) inverse colour transform
     y_scaled = (y_arr + 4096) << 16
@@ -540,12 +540,12 @@ def _place_tile_abs(y_coeffs, cb_coeffs, cr_coeffs, tile_x, tile_y, output, out_
     g = (y_scaled - cb_arr * 22527 - cr_arr * 46819) >> 21
     b = (cb_arr * 115992 + y_scaled) >> 21
 
-    np.clip(r, 0, 255, out=r)
-    np.clip(g, 0, 255, out=g)
-    np.clip(b, 0, 255, out=b)
+    clip(r, 0, 255, out=r)
+    clip(g, 0, 255, out=g)
+    clip(b, 0, 255, out=b)
 
     # Assemble BGRA tile
-    bgra = np.empty((tile_h, tile_w, 4), dtype=np.uint8)
+    bgra = empty((tile_h, tile_w, 4), dtype=uint8)
     bgra_flat = bgra.reshape(-1, 4)
     bgra_flat[:, 0] = b
     bgra_flat[:, 1] = g
@@ -554,7 +554,7 @@ def _place_tile_abs(y_coeffs, cb_coeffs, cr_coeffs, tile_x, tile_y, output, out_
 
     # Write into output using numpy 2D view (avoids Python row loop)
     try:
-        out_arr = np.frombuffer(output, dtype=np.uint8).reshape(out_h, out_w * 4)
+        out_arr = frombuffer(output, dtype=uint8).reshape(out_h, out_w * 4)
         out_arr[tile_y:tile_y + tile_h, tile_x * 4:(tile_x + tile_w) * 4] = \
             bgra.reshape(tile_h, tile_w * 4)
     except (ValueError, IndexError):
@@ -670,7 +670,7 @@ class _SRLState:
         if is_ll:
             for i in range(length):
                 input_val = self.raw.read_bits(num_bits)
-                current[i] += np.int16(input_val << shift)
+                current[i] += int16(input_val << shift)
             return
         for i in range(length):
             if sign[i] > 0:
@@ -681,7 +681,7 @@ class _SRLState:
                 srl_val = self.read_srl(num_bits)
                 sign[i] = srl_val
                 input_val = srl_val
-            current[i] += np.int16(input_val << shift)
+            current[i] += int16(input_val << shift)
 
 
 def _upgrade_component(srl_data, raw_data, shift, num_bits, current, sign, extrapolate=False):
@@ -744,7 +744,7 @@ class RfxProgressiveDecoder:
         offset = 0
 
         while offset + 6 <= len(data):
-            block_type, block_len = struct.unpack_from('<HI', data, offset)
+            block_type, block_len = unpack_from('<HI', data, offset)
 
             if block_len < 6 or offset + block_len > len(data):
                 break
@@ -765,11 +765,11 @@ class RfxProgressiveDecoder:
         if len(data) < 12:
             return []
 
-        num_rects = struct.unpack_from('<H', data, 1)[0]
+        num_rects = unpack_from('<H', data, 1)[0]
         num_quant = data[3]
         num_prog_quant = data[4]
         flags = data[5]
-        num_tiles = struct.unpack_from('<H', data, 6)[0]
+        num_tiles = unpack_from('<H', data, 6)[0]
 
         offset = 12
 
@@ -778,7 +778,7 @@ class RfxProgressiveDecoder:
         for _ in range(num_rects):
             if offset + 8 > len(data):
                 return []
-            rx, ry, rw, rh = struct.unpack_from('<HHHH', data, offset)
+            rx, ry, rw, rh = unpack_from('<HHHH', data, offset)
             rects.append((rx, ry, rw, rh))
             offset += 8
 
@@ -798,12 +798,12 @@ class RfxProgressiveDecoder:
             prog_quants.append(ProgQuant(data[offset:offset + 16]))
             offset += 16
 
-        log.debug("RFX: region %d tiles, %d quants, %d rects, flags=0x%02X" %
+        log.debug(u'RFX: region %d tiles, %d quants, %d rects, flags=0x%02X' %
                   (num_tiles, num_quant, num_rects, flags))
         for i, (rx, ry, rw, rh) in enumerate(rects):
-            log.debug("RFX:   rect[%d]=(%d,%d,%d,%d)" % (i, rx, ry, rw, rh))
+            log.debug(u'RFX:   rect[%d]=(%d,%d,%d,%d)' % (i, rx, ry, rw, rh))
         for i, q in enumerate(quants):
-            log.debug("RFX:   quant[%d] LL3=%d LH3=%d HL3=%d HH3=%d LH2=%d HL2=%d HH2=%d LH1=%d HL1=%d HH1=%d" %
+            log.debug(u'RFX:   quant[%d] LL3=%d LH3=%d HL3=%d HH3=%d LH2=%d HL2=%d HH2=%d LH1=%d HL1=%d HH1=%d' %
                       (i, q.LL3, q.LH3, q.HL3, q.HH3, q.LH2, q.HL2, q.HH2, q.LH1, q.HL1, q.HH1))
 
         extrapolate = (flags & 0x01) != 0
@@ -812,7 +812,7 @@ class RfxProgressiveDecoder:
         for _ in range(num_tiles):
             if offset + 6 > len(data):
                 break
-            tile_type, tile_len = struct.unpack_from('<HI', data, offset)
+            tile_type, tile_len = unpack_from('<HI', data, offset)
 
             if tile_len < 6 or offset + tile_len > len(data):
                 break
@@ -821,7 +821,7 @@ class RfxProgressiveDecoder:
 
             # Log tile position from header (xIdx at offset 3, yIdx at offset 5)
             if len(tile_data) >= 7:
-                tx, ty = struct.unpack_from('<HH', tile_data, 3)
+                tx, ty = unpack_from('<HH', tile_data, 3)
                 tile_positions.append((tx, ty))
 
             if tile_type == PROG_WBT_TILE_SIMPLE:
@@ -835,10 +835,10 @@ class RfxProgressiveDecoder:
             offset += tile_len
 
         if tile_positions:
-            log.debug("RFX: tile positions (idx): %s" %
-                      ", ".join("(%d,%d)" % (tx, ty) for tx, ty in tile_positions[:10]))
+            log.debug(u'RFX: tile positions (idx): %s' %
+                      u', '.join(u'(%d,%d)' % (tx, ty) for tx, ty in tile_positions[:10]))
             if len(tile_positions) > 10:
-                log.debug("RFX:   ... and %d more tiles" % (len(tile_positions) - 10))
+                log.debug(u'RFX:   ... and %d more tiles' % (len(tile_positions) - 10))
 
         # MS-RDPEGFX: numRects==0 means the tile data represents a full-surface
         # refresh — compute dirty bounds from decoded tile positions.
@@ -864,9 +864,9 @@ class RfxProgressiveDecoder:
         quant_idx_y = data[0]
         quant_idx_cb = data[1]
         quant_idx_cr = data[2]
-        x_idx, y_idx = struct.unpack_from('<HH', data, 3)
+        x_idx, y_idx = unpack_from('<HH', data, 3)
         flags = data[7]
-        y_len, cb_len, cr_len = struct.unpack_from('<HHH', data, 8)
+        y_len, cb_len, cr_len = unpack_from('<HHH', data, 8)
 
         is_diff = (flags & 0x01) != 0
 
@@ -893,7 +893,7 @@ class RfxProgressiveDecoder:
             prev_cr = self._tileState[key]['cr']
 
         if self._debug_tile_count < 3:
-            log.debug("RFX: TILE_SIMPLE (%d,%d) isDiff=%s yLen=%d cbLen=%d crLen=%d qY=%d qCb=%d qCr=%d" %
+            log.debug(u'RFX: TILE_SIMPLE (%d,%d) isDiff=%s yLen=%d cbLen=%d crLen=%d qY=%d qCb=%d qCr=%d' %
                       (x_idx, y_idx, is_diff, y_len, cb_len, cr_len,
                        quant_idx_y, quant_idx_cb, quant_idx_cr))
         self._debug_tile_count += 1
@@ -917,10 +917,10 @@ class RfxProgressiveDecoder:
         quant_idx_y = data[0]
         quant_idx_cb = data[1]
         quant_idx_cr = data[2]
-        x_idx, y_idx = struct.unpack_from('<HH', data, 3)
+        x_idx, y_idx = unpack_from('<HH', data, 3)
         flags = data[7]
         quality = data[8]
-        y_len, cb_len, cr_len = struct.unpack_from('<HHH', data, 9)
+        y_len, cb_len, cr_len = unpack_from('<HHH', data, 9)
 
         is_diff = (flags & 0x01) != 0
 
@@ -957,7 +957,7 @@ class RfxProgressiveDecoder:
             prev_cr = self._tileState[key]['cr']
 
         if self._debug_tile_count < 3:
-            log.debug("RFX: TILE_FIRST (%d,%d) isDiff=%s quality=%d yLen=%d cbLen=%d crLen=%d qY=%d qCb=%d qCr=%d" %
+            log.debug(u'RFX: TILE_FIRST (%d,%d) isDiff=%s quality=%d yLen=%d cbLen=%d crLen=%d qY=%d qCb=%d qCr=%d' %
                       (x_idx, y_idx, is_diff, quality, y_len, cb_len, cr_len,
                        quant_idx_y, quant_idx_cb, quant_idx_cr))
         self._debug_tile_count += 1
@@ -982,9 +982,9 @@ class RfxProgressiveDecoder:
         quant_idx_y = data[0]
         quant_idx_cb = data[1]
         quant_idx_cr = data[2]
-        x_idx, y_idx = struct.unpack_from('<HH', data, 3)
+        x_idx, y_idx = unpack_from('<HH', data, 3)
         quality = data[7]
-        y_srl_len, y_raw_len, cb_srl_len, cb_raw_len, cr_srl_len, cr_raw_len = struct.unpack_from('<HHHHHH', data, 8)
+        y_srl_len, y_raw_len, cb_srl_len, cb_raw_len, cr_srl_len, cr_raw_len = unpack_from('<HHHHHH', data, 8)
 
         off = 20
         y_srl = data[off:off + y_srl_len];

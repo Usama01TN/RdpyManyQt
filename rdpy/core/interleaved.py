@@ -17,8 +17,7 @@ is drawn identically. The result is returned top-down (FreeRDP copies the
 decoded bottom-up buffer with FREERDP_FLIP_VERTICAL).
 """
 from __future__ import absolute_import, division, print_function
-
-import array
+from array import array
 
 REGULAR_BG_RUN = 0x00
 MEGA_MEGA_BG_RUN = 0xF0
@@ -40,12 +39,10 @@ SPECIAL_FGBG_1 = 0xF9
 SPECIAL_FGBG_2 = 0xFA
 SPECIAL_WHITE = 0xFD
 SPECIAL_BLACK = 0xFE
-
 MASK_SPECIAL_FGBG_1 = 0x03
 MASK_SPECIAL_FGBG_2 = 0x05
-
-_MEGA = (MEGA_MEGA_BG_RUN, MEGA_MEGA_FG_RUN, MEGA_MEGA_SET_FG_RUN, MEGA_MEGA_DITHERED_RUN,
-         MEGA_MEGA_COLOR_RUN, MEGA_MEGA_FGBG_IMAGE, MEGA_MEGA_SET_FGBG_IMAGE, MEGA_MEGA_COLOR_IMAGE)
+_MEGA = (MEGA_MEGA_BG_RUN, MEGA_MEGA_FG_RUN, MEGA_MEGA_SET_FG_RUN, MEGA_MEGA_DITHERED_RUN, MEGA_MEGA_COLOR_RUN,
+         MEGA_MEGA_FGBG_IMAGE, MEGA_MEGA_SET_FGBG_IMAGE, MEGA_MEGA_COLOR_IMAGE)
 
 
 class RleError(Exception):
@@ -55,10 +52,10 @@ class RleError(Exception):
 def _codeId(header):
     """FreeRDP ExtractCodeId."""
     if (header & 0xC0) != 0xC0:
-        return header >> 5          # regular orders
+        return header >> 5  # regular orders
     if (header & 0xF0) == 0xF0:
-        return header               # mega-mega and special orders
-    return header >> 4              # lite orders
+        return header  # mega-mega and special orders
+    return header >> 4  # lite orders
 
 
 def _runLength(code, src, s, end):
@@ -114,7 +111,7 @@ def rleDecompress(data, width, height, bytesPerPixel):
     end = len(src)
     rowDelta = width
     total = width * height
-    out = array.array('I', [0]) * total
+    out = array('I', [0]) * total
     white = (1 << (8 * bytesPerPixel)) - 1
     size = bytesPerPixel
     d = 0
@@ -134,29 +131,29 @@ def rleDecompress(data, width, height, bytesPerPixel):
         if code == REGULAR_BG_RUN or code == MEGA_MEGA_BG_RUN:
             run, advance = _runLength(code, src, s, end)
             if advance == 0:
-                raise RleError("background run")
+                raise RleError(u'background run')
             s += advance
             if firstLine:
                 if insertFgPel:
                     if d + 1 > total:
-                        raise RleError("overflow")
+                        raise RleError(u'overflow')
                     out[d] = fgPel
                     d += 1
                     run -= 1
                 if run < 0 or d + run > total:
-                    raise RleError("overflow")
-                d += run                     # black pixels (buffer is zeroed)
+                    raise RleError(u'overflow')
+                d += run  # black pixels (buffer is zeroed)
             else:
                 if insertFgPel:
                     if d + 1 > total:
-                        raise RleError("overflow")
+                        raise RleError(u'overflow')
                     out[d] = out[d - rowDelta] ^ fgPel
                     d += 1
                     run -= 1
                 if run < 0 or d + run > total:
-                    raise RleError("overflow")
+                    raise RleError(u'overflow')
                 while run > 0:
-                    n = run if run < rowDelta else rowDelta   # never copies a pixel not yet written
+                    n = run if run < rowDelta else rowDelta  # never copies a pixel not yet written
                     out[d:d + n] = out[d - rowDelta:d - rowDelta + n]
                     d += n
                     run -= n
@@ -168,17 +165,17 @@ def rleDecompress(data, width, height, bytesPerPixel):
         if code in (REGULAR_FG_RUN, MEGA_MEGA_FG_RUN, LITE_SET_FG_FG_RUN, MEGA_MEGA_SET_FG_RUN):
             run, advance = _runLength(code, src, s, end)
             if advance == 0:
-                raise RleError("foreground run")
+                raise RleError(u'foreground run')
             s += advance
             if code == LITE_SET_FG_FG_RUN or code == MEGA_MEGA_SET_FG_RUN:
                 if s + size > end:
-                    raise RleError("truncated")
+                    raise RleError(u'truncated')
                 fgPel = _readPixel(src, s, size)
                 s += size
             if d + run > total:
-                raise RleError("overflow")
+                raise RleError(u'overflow')
             if firstLine:
-                out[d:d + run] = array.array('I', [fgPel]) * run
+                out[d:d + run] = array('I', [fgPel]) * run
                 d += run
             else:
                 for _ in range(run):
@@ -188,44 +185,44 @@ def rleDecompress(data, width, height, bytesPerPixel):
         elif code == LITE_DITHERED_RUN or code == MEGA_MEGA_DITHERED_RUN:
             run, advance = _runLength(code, src, s, end)
             if advance == 0:
-                raise RleError("dithered run")
+                raise RleError(u'dithered run')
             s += advance
             if s + 2 * size > end:
-                raise RleError("truncated")
+                raise RleError(u'truncated')
             pixelA = _readPixel(src, s, size)
             pixelB = _readPixel(src, s + size, size)
             s += 2 * size
             if d + 2 * run > total:
-                raise RleError("overflow")
-            out[d:d + 2 * run] = array.array('I', [pixelA, pixelB]) * run
+                raise RleError(u'overflow')
+            out[d:d + 2 * run] = array('I', [pixelA, pixelB]) * run
             d += 2 * run
 
         elif code == REGULAR_COLOR_RUN or code == MEGA_MEGA_COLOR_RUN:
             run, advance = _runLength(code, src, s, end)
             if advance == 0:
-                raise RleError("colour run")
+                raise RleError(u'colour run')
             s += advance
             if s + size > end:
-                raise RleError("truncated")
+                raise RleError(u'truncated')
             pixelA = _readPixel(src, s, size)
             s += size
             if d + run > total:
-                raise RleError("overflow")
-            out[d:d + run] = array.array('I', [pixelA]) * run
+                raise RleError(u'overflow')
+            out[d:d + run] = array('I', [pixelA]) * run
             d += run
 
         elif code in (REGULAR_FGBG_IMAGE, MEGA_MEGA_FGBG_IMAGE, LITE_SET_FG_FGBG_IMAGE, MEGA_MEGA_SET_FGBG_IMAGE):
             run, advance = _runLength(code, src, s, end)
             if advance == 0:
-                raise RleError("fg/bg image")
+                raise RleError(u'fg/bg image')
             s += advance
             if code == LITE_SET_FG_FGBG_IMAGE or code == MEGA_MEGA_SET_FGBG_IMAGE:
                 if s + size > end:
-                    raise RleError("truncated")
+                    raise RleError(u'truncated')
                 fgPel = _readPixel(src, s, size)
                 s += size
             if s + run // 8 > end:
-                raise RleError("truncated")
+                raise RleError(u'truncated')
             while run > 8:
                 bitmask = src[s]
                 s += 1
@@ -233,7 +230,7 @@ def rleDecompress(data, width, height, bytesPerPixel):
                 run -= 8
             if run > 0:
                 if s + 1 > end:
-                    raise RleError("truncated")
+                    raise RleError(u'truncated')
                 bitmask = src[s]
                 s += 1
                 d = _fgbg(out, d, total, rowDelta, bitmask, fgPel, run, firstLine)
@@ -241,38 +238,38 @@ def rleDecompress(data, width, height, bytesPerPixel):
         elif code == REGULAR_COLOR_IMAGE or code == MEGA_MEGA_COLOR_IMAGE:
             run, advance = _runLength(code, src, s, end)
             if advance == 0:
-                raise RleError("colour image")
+                raise RleError(u'colour image')
             s += advance
             if d + run > total or s + run * size > end:
-                raise RleError("overflow")
+                raise RleError(u'overflow')
             if size == 1:
-                out[d:d + run] = array.array('I', src[s:s + run])
+                out[d:d + run] = array('I', src[s:s + run])
             elif size == 2:
-                out[d:d + run] = array.array('I', [src[i] | (src[i + 1] << 8) for i in range(s, s + 2 * run, 2)])
+                out[d:d + run] = array('I', [src[i] | (src[i + 1] << 8) for i in range(s, s + 2 * run, 2)])
             else:
-                out[d:d + run] = array.array('I', [src[i] | (src[i + 1] << 8) | (src[i + 2] << 16)
-                                                  for i in range(s, s + 3 * run, 3)])
+                out[d:d + run] = array('I', [src[i] | (src[i + 1] << 8) | (src[i + 2] << 16)
+                                             for i in range(s, s + 3 * run, 3)])
             s += run * size
             d += run
 
         elif code == SPECIAL_FGBG_1 or code == SPECIAL_FGBG_2:
             if s + 1 > end:
-                raise RleError("truncated")
+                raise RleError(u'truncated')
             s += 1
             mask = MASK_SPECIAL_FGBG_1 if code == SPECIAL_FGBG_1 else MASK_SPECIAL_FGBG_2
             d = _fgbg(out, d, total, rowDelta, mask, fgPel, 8, firstLine)
 
         elif code == SPECIAL_WHITE or code == SPECIAL_BLACK:
             if s + 1 > end:
-                raise RleError("truncated")
+                raise RleError(u'truncated')
             s += 1
             if d + 1 > total:
-                raise RleError("overflow")
+                raise RleError(u'overflow')
             out[d] = white if code == SPECIAL_WHITE else 0
             d += 1
 
         else:
-            raise RleError("invalid code 0x%02x" % code)
+            raise RleError(u'invalid code 0x%02x' % code)
 
     return out
 
@@ -289,7 +286,7 @@ def _readPixel(src, s, size):
 def _fgbg(out, d, total, rowDelta, bitmask, fgPel, cBits, firstLine):
     """WRITEFGBGIMAGE / WRITEFIRSTLINEFGBGIMAGE."""
     if cBits > 8 or d + cBits > total:
-        raise RleError("overflow")
+        raise RleError(u'overflow')
     mask = 0x01
     for _ in range(cBits):
         if firstLine:
@@ -309,13 +306,13 @@ def decompress(data, width, height, bytesPerPixel):
     pixels: BGR for 24 bpp, RGB565 / RGB555 for 16 / 15 bpp)
     @raise RleError: invalid stream
     """
-    import numpy as np
-    pixels = np.frombuffer(rleDecompress(data, width, height, bytesPerPixel), dtype=np.uint32)
+    from numpy import ascontiguousarray, frombuffer, uint32, uint8
+    pixels = frombuffer(rleDecompress(data, width, height, bytesPerPixel), dtype=uint32)
     if bytesPerPixel == 1:
         rows = pixels.astype('<u1').reshape(height, width)
     elif bytesPerPixel == 2:
         rows = pixels.astype('<u2').reshape(height, width)
     else:
-        rows = pixels.astype('<u4').view(np.uint8).reshape(height, width, 4)[:, :, :3]
+        rows = pixels.astype('<u4').view(uint8).reshape(height, width, 4)[:, :, :3]
     # bottom-up -> top-down (FREERDP_FLIP_VERTICAL)
-    return np.ascontiguousarray(rows[::-1]).tobytes()
+    return ascontiguousarray(rows[::-1]).tobytes()

@@ -13,7 +13,12 @@ Several parts follow the logic of FreeRDP (https://github.com/FreeRDP/FreeRDP),
 Copyright the FreeRDP contributors, licensed under the Apache License 2.0
 (compatible with the GPL version 3): audio input (channels/audin), graphics
 pipeline presentation (libfreerdp/gdi/gfx.c), connection security and
-disconnect sequence (libfreerdp/core), TCP keep-alive settings.
+disconnect sequence (libfreerdp/core), TCP keep-alive settings, printer, serial,
+parallel and smart card redirection (channels/printer, channels/serial,
+channels/parallel, channels/smartcard, libfreerdp/utils/smartcard_*.c,
+winpr/libwinpr/comm, winpr/libwinpr/smartcard), display control (channels/disp,
+client/X11/xf_disp.c), RemoteApp (channels/rail, libfreerdp/core/window.c,
+client/X11/xf_rail.c) and USB redirection (channels/urbdrc).
 
 Modified files carry a "Modified (c) 2026 UsamaTN" line in their header; the
 changes are listed in CHANGELOG.md.

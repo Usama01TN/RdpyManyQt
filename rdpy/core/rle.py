@@ -1,8 +1,8 @@
 # coding=utf-8
 # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/b6a3f5c2-0804-4c10-9d25-a321720fd23e
 from __future__ import absolute_import, division, print_function
-import array
-import sys
+from sys import byteorder
+from array import array
 
 # Cache for mix XOR translation tables (keyed by mix value).
 # _mix_table_cache: for 8bpp, maps uint8 mix -> 256-byte translate table
@@ -39,7 +39,6 @@ def _parse_opcode(inp, pos):
     code = inp[pos]
     pos += 1
     opcode = code >> 4
-
     if opcode in (0xc, 0xd, 0xe):
         opcode -= 6
         count = code & 0xf
@@ -58,7 +57,6 @@ def _parse_opcode(inp, pos):
         opcode >>= 1
         count = code & 0x1f
         offset = 32
-
     if offset != 0:
         isfillormix = (opcode == 2) or (opcode == 7)
         if count == 0:
@@ -70,7 +68,6 @@ def _parse_opcode(inp, pos):
                 pos += 1
         elif isfillormix:
             count <<= 3
-
     return opcode, count, pos
 
 
@@ -108,15 +105,15 @@ def _decompress1(output, width, height, input_data):
             if (lastopcode == opcode) and not (x == width and prevline == 0):
                 insertmix = True
         elif opcode == 8:  # Bicolour
-            colour1 = inp[pos];
+            colour1 = inp[pos]
             pos += 1
-            colour2 = inp[pos];
+            colour2 = inp[pos]
             pos += 1
         elif opcode == 3:  # Colour
-            colour2 = inp[pos];
+            colour2 = inp[pos]
             pos += 1
         elif opcode == 6 or opcode == 7:  # SetMix/Mix or SetMix/FillOrMix
-            mix = inp[pos];
+            mix = inp[pos]
             pos += 1
             mix_table = _get_mix_table(mix)
             _mix_buf = bytearray([mix]) * width
@@ -175,7 +172,7 @@ def _decompress1(output, width, height, input_data):
                         if fom_mask != 0:
                             mask = fom_mask
                         else:
-                            mask = inp[pos];
+                            mask = inp[pos]
                             pos += 1
                         mixmask = 1
                     if mask & mixmask:
@@ -252,12 +249,12 @@ def _decompress2(output, width, height, input_data):
     mixmask = 0
 
     # Internal buffer of uint16 pixel values (pixel-indexed)
-    pixels = array.array('H', b'\x00' * (width * height * 2))
+    pixels = array('H', b'\x00' * (width * height * 2))
     # Pre-allocated zero row for Fill/Black ops
-    _zero_row = array.array('H', b'\x00' * (width * 2))
+    _zero_row = array('H', b'\x00' * (width * 2))
     # Pre-allocated single-element arrays for repeated fill patterns
-    _mix_arr = array.array('H', [mix])
-    _white_arr = array.array('H', [0xffff])
+    _mix_arr = array('H', [mix])
+    _white_arr = array('H', [0xffff])
 
     while pos < n:
         fom_mask = 0
@@ -273,7 +270,7 @@ def _decompress2(output, width, height, input_data):
             colour2, pos = _read_pixel16(inp, pos)
         elif opcode == 6 or opcode == 7:  # SetMix/Mix or SetMix/FillOrMix
             mix, pos = _read_pixel16(inp, pos)
-            _mix_arr = array.array('H', [mix])
+            _mix_arr = array('H', [mix])
             opcode -= 5
         elif opcode == 9:  # FillOrMix_1
             mask = 0x03
@@ -320,8 +317,7 @@ def _decompress2(output, width, height, input_data):
                     src_off = prevline + x
                     # Batch XOR using array slicing + list comprehension
                     src_slice = pixels[src_off:src_off + n_pix]
-                    pixels[dst:dst + n_pix] = array.array('H',
-                                                          ((v ^ mix) & 0xffff for v in src_slice))
+                    pixels[dst:dst + n_pix] = array('H', ((v ^ mix) & 0xffff for v in src_slice))
                 count -= n_pix
                 x += n_pix
 
@@ -332,7 +328,7 @@ def _decompress2(output, width, height, input_data):
                         if fom_mask != 0:
                             mask = fom_mask
                         else:
-                            mask = inp[pos];
+                            mask = inp[pos]
                             pos += 1
                         mixmask = 1
                     if mask & mixmask:
@@ -344,13 +340,13 @@ def _decompress2(output, width, height, input_data):
 
             elif opcode == 3:  # Colour
                 n_pix = min(count, width - x)
-                pixels[line + x: line + x + n_pix] = array.array('H', [colour2]) * n_pix
+                pixels[line + x: line + x + n_pix] = array('H', [colour2]) * n_pix
                 count -= n_pix
                 x += n_pix
 
             elif opcode == 4:  # Copy
                 n_pix = min(count, width - x)
-                chunk = array.array('H')
+                chunk = array('H')
                 chunk.frombytes(inp[pos: pos + n_pix * 2])
                 pixels[line + x: line + x + n_pix] = chunk
                 pos += n_pix * 2
@@ -385,7 +381,7 @@ def _decompress2(output, width, height, input_data):
                 return
 
     # Serialize uint16 pixels to output bytearray as little-endian
-    if sys.byteorder == 'big':
+    if byteorder == 'big':
         pixels.byteswap()
     output[:] = pixels.tobytes()
 
@@ -510,7 +506,7 @@ def _decompress3(output, width, height, input_data):
                         if fom_mask != 0:
                             mask = fom_mask
                         else:
-                            mask = inp[pos];
+                            mask = inp[pos]
                             pos += 1
                         mixmask = 1
                     off = line + 3 * x
@@ -618,7 +614,7 @@ def process_plane(input_data, width, height, output, j):
 
         if indexh == 0:
             while indexw < width:
-                code = inp[pos];
+                code = inp[pos]
                 pos += 1
                 replen = code & 0x0F
                 collen = (code >> 4) & 0xF
@@ -627,7 +623,7 @@ def process_plane(input_data, width, height, output, j):
                     replen = revcode
                     collen = 0
                 while collen > 0:
-                    color = inp[pos];
+                    color = inp[pos]
                     pos += 1
                     output[i] = color & 0xFF
                     i += 4
@@ -640,7 +636,7 @@ def process_plane(input_data, width, height, output, j):
                     indexw += replen
         else:
             while indexw < width:
-                code = inp[pos];
+                code = inp[pos]
                 pos += 1
                 replen = code & 0x0F
                 collen = (code >> 4) & 0x0F
@@ -649,7 +645,7 @@ def process_plane(input_data, width, height, output, j):
                     replen = revcode
                     collen = 0
                 while collen > 0:
-                    x_val = inp[pos];
+                    x_val = inp[pos]
                     pos += 1
                     if x_val & 1:
                         color = -(x_val >> 1) - 1
@@ -682,33 +678,24 @@ def bitmap_decompress4(input_data, width, height):
         return bytes(max(0, width * height * BPP))
     size = width * height * BPP
     output = bytearray(size)
-
     code, input_data = CVAL(input_data)
     rle = (code & 0x10) != 0
     no_alpha = (code & 0x20) != 0
-
     if not rle:
         return bytes(output)
-
     total = 1
-
     if no_alpha:
         # No alpha plane in the stream; fill alpha channel with 0xFF.
         output[3::4] = b'\xff' * (width * height)
     else:
         process_ln, input_data = process_plane(input_data, width, height, output, 3)
         total += process_ln
-
     process_ln, input_data = process_plane(input_data, width, height, output, 2)
     total += process_ln
-
     process_ln, input_data = process_plane(input_data, width, height, output, 1)
     total += process_ln
-
     process_ln, input_data = process_plane(input_data, width, height, output, 0)
     total += process_ln
-
     # Force alpha channel to 0xFF for Qt Format_RGB32 compatibility.
     output[3::4] = b'\xff' * (width * height)
-
     return bytes(output)

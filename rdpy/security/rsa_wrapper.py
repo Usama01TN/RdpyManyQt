@@ -18,10 +18,13 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
 """
-Wrapper around RSA library
+Wrapper around RSA library.
 """
 from __future__ import absolute_import, division, print_function
-import rsa
+from rsa import newkeys as rsa_newkeys, transform
+from rsa.core import decrypt_int, encrypt_int
+from rsa.randnum import read_random_bits
+from rsa.common import byte_size
 
 
 def newkeys(size):
@@ -29,7 +32,7 @@ def newkeys(size):
     @summary: wrapper around rsa.newkeys function
     @param size: {integer} size of key
     """
-    return rsa.newkeys(size)
+    return rsa_newkeys(size)
 
 
 def PublicKey(e, n):
@@ -38,9 +41,9 @@ def PublicKey(e, n):
     @param n: {long | bytes}modulus
     """
     if isinstance(e, bytes):
-        e = rsa.transform.bytes2int(e)
+        e = transform.bytes2int(e)
     if isinstance(n, bytes):
-        n = rsa.transform.bytes2int(n)
+        n = transform.bytes2int(n)
     return {'e': e, 'n': n}
 
 
@@ -50,9 +53,9 @@ def PrivateKey(d, n):
     @param n: {long | bytes}modulus
     """
     if isinstance(d, bytes):
-        d = rsa.transform.bytes2int(d)
+        d = transform.bytes2int(d)
     if isinstance(n, bytes):
-        n = rsa.transform.bytes2int(n)
+        n = transform.bytes2int(n)
     return {'d': d, 'n': n}
 
 
@@ -60,7 +63,7 @@ def int2bytes(i, fill_size=0):
     """
     @summary: wrapper of rsa.transform.int2bytes
     """
-    return rsa.transform.int2bytes(i, fill_size)
+    return transform.int2bytes(i, fill_size)
 
 
 def random(size):
@@ -69,7 +72,7 @@ def random(size):
     @param size: {integer] size in bits
     @return: {str} random bytes array
     """
-    return rsa.randnum.read_random_bits(size)
+    return read_random_bits(size)
 
 
 def encrypt(message, publicKey):
@@ -78,9 +81,8 @@ def encrypt(message, publicKey):
     @param message: {str} source message
     @param publicKey: {rsa.PublicKey}
     """
-    return rsa.transform.int2bytes(
-        rsa.core.encrypt_int(rsa.transform.bytes2int(message), publicKey['e'], publicKey['n']),
-        rsa.common.byte_size(publicKey['n']))
+    return transform.int2bytes(
+        encrypt_int(transform.bytes2int(message), publicKey['e'], publicKey['n']), byte_size(publicKey['n']))
 
 
 def decrypt(message, privateKey):
@@ -89,8 +91,7 @@ def decrypt(message, privateKey):
     @param message: {str} source message
     @param publicKey: {rsa.PrivateKey}
     """
-    return rsa.transform.int2bytes(
-        rsa.core.decrypt_int(rsa.transform.bytes2int(message), privateKey['d'], privateKey['n']))
+    return transform.int2bytes(decrypt_int(transform.bytes2int(message), privateKey['d'], privateKey['n']))
 
 
 def sign(message, privateKey):
@@ -99,9 +100,8 @@ def sign(message, privateKey):
     @param message: {str} message to sign
     @param privateKey : {rsa.privateKey} key use to sugn
     """
-    return rsa.transform.int2bytes(
-        rsa.core.encrypt_int(rsa.transform.bytes2int(message), privateKey['d'], privateKey['n']),
-        rsa.common.byte_size(privateKey['n']))
+    return transform.int2bytes(
+        encrypt_int(transform.bytes2int(message), privateKey['d'], privateKey['n']), byte_size(privateKey['n']))
 
 
 def verify(message, publicKey):
@@ -110,5 +110,4 @@ def verify(message, publicKey):
     @param message: {str} message to verify
     @param publicKey : {rsa.publicKey} key use to sugn
     """
-    return rsa.transform.int2bytes(
-        rsa.core.decrypt_int(rsa.transform.bytes2int(message), publicKey['e'], publicKey['n']))
+    return transform.int2bytes(decrypt_int(transform.bytes2int(message), publicKey['e'], publicKey['n']))

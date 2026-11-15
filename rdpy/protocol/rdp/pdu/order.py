@@ -104,14 +104,14 @@ class PrimaryDrawingOrder(CompositeType):
             for c in [DstBltOrder]:
                 if self.orderType.value == c._ORDER_TYPE_:
                     return c(self.controlFlags)
-            log.debug("unknown Order type : %s" % hex(self.orderType.value))
+            log.debug(u'unknown Order type : %s' % hex(self.orderType.value))
             #read entire packet
             return String()
 
         if order is None:
             order = FactoryType(OrderFactory)
-        elif not "_ORDER_TYPE_" in order.__class__.__dict__:
-            raise InvalidExpectedDataException("Try to send an invalid order block")
+        elif not u'_ORDER_TYPE_' in order.__class__.__dict__:
+            raise InvalidExpectedDataException(u'Try to send an invalid order block')
 
 
 class DstBltOrder(CompositeType):

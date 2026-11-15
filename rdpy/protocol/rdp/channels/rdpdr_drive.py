@@ -17,65 +17,56 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 RDPDR drive redirection device (MS-RDPEFS 2.2.3 File System Virtual Channel).
 Exposes a local directory to the server as a redirected drive.
-
 Ported from FreeRDP channels/drive/client (drive_main.c, drive_file.c).
 Like FreeRDP's asynchronous mode, each drive processes its IRPs on its own
 worker thread, so large file transfers do not block the Qt / Twisted
 main loop. Completions are sent back from the reactor thread.
-
 Protocol reference: [MS-RDPEFS], [MS-FSCC]
 """
 from __future__ import absolute_import, division, print_function
-
-import errno
+from errno import EROFS, EISDIR, EEXIST, ENOTEMPTY, ENOSPC, EBUSY, ENAMETOOLONG, EBADF, ENOTDIR, ENOENT, EACCES, \
+    EPERM, EXDEV
+from stat import S_ISDIR, S_ISREG, S_ISLNK, S_IWUSR, S_IWGRP, S_IWOTH, S_IMODE
+from re import compile, DOTALL, escape, IGNORECASE, search, split
+from shutil import disk_usage, move
+from threading import Lock, Thread
+from struct import pack
+from zlib import crc32
 import os
-from rdpy.core.compat import queue, replace as _replace, isErrno
-import re
-import shutil
-import stat
-import struct
-import threading
-import zlib
-
-import rdpy.core.log as log
+from .rdpdr import RdpdrDevice, decodeUnicodeString, RDPDR_DTYP_FILESYSTEM, IRP_MJ_CREATE, IRP_MJ_CLOSE, IRP_MJ_READ, \
+    IRP_MJ_WRITE, IRP_MJ_QUERY_INFORMATION, IRP_MJ_SET_INFORMATION, IRP_MJ_QUERY_VOLUME_INFORMATION, \
+    IRP_MJ_DIRECTORY_CONTROL, IRP_MJ_DEVICE_CONTROL, IRP_MJ_LOCK_CONTROL, IRP_MN_QUERY_DIRECTORY, STATUS_SUCCESS, \
+    STATUS_UNSUCCESSFUL, STATUS_NOT_SUPPORTED, STATUS_ACCESS_DENIED, STATUS_NO_SUCH_FILE, STATUS_DEVICE_BUSY, \
+    STATUS_OBJECT_NAME_COLLISION, STATUS_INVALID_HANDLE, STATUS_NO_MORE_FILES, STATUS_NOT_A_DIRECTORY, \
+    STATUS_OBJECT_PATH_NOT_FOUND, STATUS_DIRECTORY_NOT_EMPTY, STATUS_DISK_FULL, STATUS_OBJECT_NAME_INVALID, \
+    STATUS_INVALID_PARAMETER, STATUS_FILE_LOCK_CONFLICT, STATUS_LOCK_NOT_GRANTED, STATUS_RANGE_NOT_LOCKED, \
+    STATUS_INSUFFICIENT_RESOURCES, STATUS_INVALID_LOCK_RANGE
 from rdpy.core.filetimes import EPOCH_AS_FILETIME, HUNDREDS_OF_NANOSECONDS
+from rdpy.core.compat import queue, replace as _replace, isErrno
+from rdpy.core import log
 from . import rdpdr
-from .rdpdr import (
-    RdpdrDevice, decodeUnicodeString, RDPDR_DTYP_FILESYSTEM,
-    IRP_MJ_CREATE, IRP_MJ_CLOSE, IRP_MJ_READ, IRP_MJ_WRITE, IRP_MJ_QUERY_INFORMATION,
-    IRP_MJ_SET_INFORMATION, IRP_MJ_QUERY_VOLUME_INFORMATION, IRP_MJ_DIRECTORY_CONTROL,
-    IRP_MJ_DEVICE_CONTROL, IRP_MJ_LOCK_CONTROL, IRP_MN_QUERY_DIRECTORY,
-    STATUS_SUCCESS, STATUS_UNSUCCESSFUL, STATUS_NOT_SUPPORTED, STATUS_ACCESS_DENIED,
-    STATUS_NO_SUCH_FILE, STATUS_DEVICE_BUSY, STATUS_OBJECT_NAME_COLLISION,
-    STATUS_INVALID_HANDLE, STATUS_NO_MORE_FILES, STATUS_NOT_A_DIRECTORY,
-    STATUS_OBJECT_PATH_NOT_FOUND, STATUS_DIRECTORY_NOT_EMPTY, STATUS_DISK_FULL,
-    STATUS_OBJECT_NAME_INVALID, STATUS_INVALID_PARAMETER, STATUS_FILE_LOCK_CONFLICT,
-    STATUS_LOCK_NOT_GRANTED, STATUS_RANGE_NOT_LOCKED, STATUS_INSUFFICIENT_RESOURCES,
-    STATUS_INVALID_LOCK_RANGE,
-)
 
+try:
+    from errno import EDQUOT
+except:
+    EDQUOT = -1
 _IS_WINDOWS = os.name == 'nt'
 _O_BINARY = getattr(os, 'O_BINARY', 0)
-
 # Resource limits: a server must not be able to exhaust the client memory
 _MAX_READ_LENGTH = 16 * 1024 * 1024  # bytes returned by one IRP_MJ_READ
 _MAX_QUEUED_IRPS = 256  # IRPs waiting for the worker thread
 _MAX_QUEUED_BYTES = 64 * 1024 * 1024  # request bytes waiting for the worker thread
-
 # DR_WRITE_REQ.Offset value meaning "append" (client minor version >= 0x000D)
 _APPEND_OFFSET = 0xFFFFFFFFFFFFFFFF
 _MAX_FILE_OFFSET = 0x7FFFFFFFFFFFFFFF
-
 # DR_DRIVE_LOCK_REQ.Operation (MS-RDPEFS 2.2.3.3.12)
 RDP_LOWIO_OP_SHAREDLOCK = 0x00000002
 RDP_LOWIO_OP_EXCLUSIVELOCK = 0x00000003
 RDP_LOWIO_OP_UNLOCK = 0x00000004
 RDP_LOWIO_OP_UNLOCK_MULTIPLE = 0x00000005
-
 # Access mask ([MS-SMB2] 2.2.13.1)
 FILE_READ_DATA = 0x00000001
 FILE_WRITE_DATA = 0x00000002
@@ -86,10 +77,8 @@ GENERIC_ALL = 0x10000000
 GENERIC_EXECUTE = 0x20000000
 GENERIC_WRITE = 0x40000000
 GENERIC_READ = 0x80000000
-
 _NEED_WRITE = FILE_WRITE_DATA | FILE_APPEND_DATA | GENERIC_WRITE | GENERIC_ALL
 _NEED_READ = FILE_READ_DATA | FILE_EXECUTE | GENERIC_READ | GENERIC_EXECUTE | GENERIC_ALL | MAXIMUM_ALLOWED
-
 # CreateDisposition
 FILE_SUPERSEDE = 0x00000000
 FILE_OPEN = 0x00000001
@@ -97,17 +86,14 @@ FILE_CREATE = 0x00000002
 FILE_OPEN_IF = 0x00000003
 FILE_OVERWRITE = 0x00000004
 FILE_OVERWRITE_IF = 0x00000005
-
 # CreateOptions
 FILE_DIRECTORY_FILE = 0x00000001
 FILE_NON_DIRECTORY_FILE = 0x00000040
 FILE_DELETE_ON_CLOSE = 0x00001000
-
 # Create response Information
 FILE_SUPERSEDED = 0x00000000
 FILE_OPENED = 0x00000001
 FILE_OVERWRITTEN = 0x00000003
-
 # File attributes ([MS-FSCC] 2.6)
 FILE_ATTRIBUTE_READONLY = 0x00000001
 FILE_ATTRIBUTE_HIDDEN = 0x00000002
@@ -116,7 +102,6 @@ FILE_ATTRIBUTE_DIRECTORY = 0x00000010
 FILE_ATTRIBUTE_ARCHIVE = 0x00000020
 FILE_ATTRIBUTE_NORMAL = 0x00000080
 FILE_ATTRIBUTE_REPARSE_POINT = 0x00000400
-
 # File information classes ([MS-FSCC] 2.4)
 FileDirectoryInformation = 1
 FileFullDirectoryInformation = 2
@@ -129,26 +114,22 @@ FileDispositionInformation = 13
 FileAllocationInformation = 19
 FileEndOfFileInformation = 20
 FileAttributeTagInformation = 35
-
 # File system information classes ([MS-FSCC] 2.5)
 FileFsVolumeInformation = 1
 FileFsSizeInformation = 3
 FileFsDeviceInformation = 4
 FileFsAttributeInformation = 5
 FileFsFullSizeInformation = 7
-
 FILE_DEVICE_DISK = 0x00000007
 FILE_CASE_SENSITIVE_SEARCH = 0x00000001
 FILE_CASE_PRESERVED_NAMES = 0x00000002
 FILE_UNICODE_ON_DISK = 0x00000004
 MAX_PATH = 260
-
 # Values reported for the volume (FreeRDP reports "FAT32" with the same flags)
-VOLUME_LABEL = "RDPYQT"
-FILE_SYSTEM_NAME = "FAT32"
+VOLUME_LABEL = u'RDPYQT'
+FILE_SYSTEM_NAME = u'FAT32'
 _BYTES_PER_SECTOR = 512
 _SECTORS_PER_CLUSTER = 8
-
 # Characters forbidden in the DEVICE_ANNOUNCE name (MS-RDPEFS 2.2.1.3)
 _FORBIDDEN_NAME_CHARS = ':<>"/\\| '
 
@@ -164,14 +145,14 @@ def defaultDriveName(path, pathmod=os.path):
     name = pathmod.basename(rest.rstrip('\\/'))
     if not name and drive:
         name = drive.rstrip(':\\/').split('\\')[-1]
-    return name or "drive"
+    return name or u'drive'
 
 
 class _IrpError(Exception):
     """Abort IRP processing and answer with an NTSTATUS."""
 
     def __init__(self, status):
-        Exception.__init__(self, "NTSTATUS 0x%08x" % status)
+        Exception.__init__(self, u'NTSTATUS 0x%08x' % status)
         self.status = status
 
 
@@ -182,23 +163,23 @@ def mapOSError(e):
     @return: {int} NTSTATUS
     """
     code = getattr(e, 'errno', None)
-    if code in (errno.EACCES, errno.EPERM, errno.EROFS, errno.EISDIR):
+    if code in (EACCES, EPERM, EROFS, EISDIR):
         return STATUS_ACCESS_DENIED
-    if code == errno.ENOENT:
+    if code == ENOENT:
         return STATUS_NO_SUCH_FILE
-    if code == errno.EEXIST:
+    if code == EEXIST:
         return STATUS_OBJECT_NAME_COLLISION
-    if code == errno.ENOTDIR:
+    if code == ENOTDIR:
         return STATUS_OBJECT_PATH_NOT_FOUND
-    if code == errno.ENOTEMPTY:
+    if code == ENOTEMPTY:
         return STATUS_DIRECTORY_NOT_EMPTY
-    if code in (errno.ENOSPC, getattr(errno, 'EDQUOT', -1)):
+    if code in (ENOSPC, EDQUOT):
         return STATUS_DISK_FULL
-    if code == errno.EBUSY:
+    if code == EBUSY:
         return STATUS_DEVICE_BUSY
-    if code == errno.ENAMETOOLONG:
+    if code == ENAMETOOLONG:
         return STATUS_OBJECT_NAME_INVALID
-    if code == errno.EBADF:
+    if code == EBADF:
         return STATUS_INVALID_HANDLE
     return STATUS_UNSUCCESSFUL
 
@@ -236,9 +217,9 @@ def fileAttributes(name, st):
                           FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_ARCHIVE)
     else:
         attr = 0
-        if stat.S_ISDIR(st.st_mode):
+        if S_ISDIR(st.st_mode):
             attr |= FILE_ATTRIBUTE_DIRECTORY
-        if not (st.st_mode & stat.S_IWUSR):
+        if not (st.st_mode & S_IWUSR):
             attr |= FILE_ATTRIBUTE_READONLY
         if name.startswith('.') and name not in ('.', '..'):
             attr |= FILE_ATTRIBUTE_HIDDEN
@@ -263,8 +244,8 @@ def _wildcardToRegex(pattern):
         elif c == '"':
             out.append(r'\.?')
         else:
-            out.append(re.escape(c))
-    return re.compile('^' + ''.join(out) + '$', re.IGNORECASE | re.DOTALL)
+            out.append(escape(c))
+    return compile('^' + ''.join(out) + '$', IGNORECASE | DOTALL)
 
 
 class _FindEntry(object):
@@ -280,7 +261,7 @@ def _isLink(st):
     @summary: True for a symbolic link, or a reparse point (junction) on Windows
     @param st: {os.stat_result} result of os.lstat
     """
-    if stat.S_ISLNK(st.st_mode):
+    if S_ISLNK(st.st_mode):
         return True
     return bool(getattr(st, 'st_file_attributes', 0) & FILE_ATTRIBUTE_REPARSE_POINT)
 
@@ -345,7 +326,7 @@ class DriveFile(object):
         try:
             self.fd = os.open(self.fullpath, self.openFlags)
         except OSError as e:
-            log.warning("RDPDR drive: cannot reopen '%s': %s" % (self.fullpath, e))
+            log.warning(u'RDPDR drive: cannot reopen \'%s\': %s' % (self.fullpath, e))
             self.fd = None
             self.readable = self.writable = False
 
@@ -363,10 +344,10 @@ class DriveDevice(RdpdrDevice):
         """
         if not path or not str(path).strip():
             # abspath('') is the working directory: never share it by accident
-            raise ValueError("drive path is empty")
+            raise ValueError(u'drive path is empty')
         basePath = os.path.abspath(os.path.expanduser(path))
         if not os.path.isdir(basePath):
-            raise ValueError("drive path is not a directory: %s" % path)
+            raise ValueError(u'drive path is not a directory: %s' % path)
         if not name:
             name = defaultDriveName(basePath)
 
@@ -383,13 +364,13 @@ class DriveDevice(RdpdrDevice):
         self._asyncIo = asyncIo
         self._queue = None
         self._thread = None
-        self._pendingLock = threading.Lock()
+        self._pendingLock = Lock()
         self._pendingCount = 0
         self._pendingBytes = 0
         if asyncIo:
             self._queue = queue.Queue()
-            self._thread = threading.Thread(target=self._threadFunc,
-                                            name="rdpdr-drive-%s" % safeName)
+            self._thread = Thread(target=self._threadFunc,
+                                            name=u'rdpdr-drive-%s' % safeName)
             self._thread.daemon = True
             self._thread.start()
 
@@ -414,7 +395,7 @@ class DriveDevice(RdpdrDevice):
                 try:
                     callback(direction, f.fullpath, count)
                 except Exception as e:
-                    log.warning("RDPDR drive: transfer callback failed: %s" % e)
+                    log.warning(u'RDPDR drive: transfer callback failed: %s' % e)
 
     def irpRequest(self, irp):
         if not self._asyncIo:
@@ -428,7 +409,7 @@ class DriveDevice(RdpdrDevice):
                 self._pendingCount += 1
                 self._pendingBytes += size
         if not accepted:
-            log.warning("RDPDR drive: too many pending requests, rejecting IRP 0x%x" %
+            log.warning(u'RDPDR drive: too many pending requests, rejecting IRP 0x%x' %
                         irp.majorFunction)
             irp.output = _errorBody(irp.majorFunction)
             irp.ioStatus = STATUS_INSUFFICIENT_RESOURCES
@@ -473,7 +454,7 @@ class DriveDevice(RdpdrDevice):
             try:
                 self._processIrp(irp)
             except Exception as e:  # never let the worker die
-                log.error("RDPDR drive: unexpected error: %s" % e)
+                log.error(u'RDPDR drive: unexpected error: %s' % e)
 
     def _closeAll(self):
         """
@@ -492,7 +473,7 @@ class DriveDevice(RdpdrDevice):
             try:
                 self._deleteFile(f)
             except (OSError, _IrpError) as e:
-                log.warning("RDPDR drive: delete-on-close of '%s' failed: %s" % (f.fullpath, e))
+                log.warning(u'RDPDR drive: delete-on-close of \'%s\' failed: %s' % (f.fullpath, e))
 
     # -------------------------------------------------------------------
     # IRP dispatch (FreeRDP drive_process_irp)
@@ -521,7 +502,7 @@ class DriveDevice(RdpdrDevice):
         except ValueError as e:
             # Malformed request: FreeRDP drops it, which leaves the server
             # waiting forever. Answer it with an error instead.
-            log.warning("RDPDR drive: malformed IRP 0x%x: %s" % (irp.majorFunction, e))
+            log.warning(u'RDPDR drive: malformed IRP 0x%x: %s' % (irp.majorFunction, e))
             irp.output = _errorBody(irp.majorFunction)
             irp.ioStatus = STATUS_INVALID_PARAMETER
         except _IrpError as e:
@@ -533,7 +514,7 @@ class DriveDevice(RdpdrDevice):
         except Exception as e:
             # Any other failure must still answer the server, otherwise the
             # request stays pending forever on the remote side.
-            log.error("RDPDR drive: IRP 0x%x failed: %r" % (irp.majorFunction, e))
+            log.error(u'RDPDR drive: IRP 0x%x failed: %r' % (irp.majorFunction, e))
             irp.output = _errorBody(irp.majorFunction)
             irp.ioStatus = STATUS_UNSUCCESSFUL
         irp.complete()
@@ -551,11 +532,11 @@ class DriveDevice(RdpdrDevice):
         @return: {str} local absolute path
         """
         parts = []
-        for part in re.split(r'[\\/]', rawPath):
+        for part in split(r'[\\/]', rawPath):
             if part in ('', '.'):
                 continue
             if part == '..':
-                log.warning("RDPDR drive: received invalid file path '%s' from server, aborting!" % rawPath)
+                log.warning(u'RDPDR drive: received invalid file path \'%s\' from server, aborting!' % rawPath)
                 raise _IrpError(STATUS_ACCESS_DENIED)
             if _IS_WINDOWS and (':' in part or part.rstrip('. ') != part):
                 raise _IrpError(STATUS_OBJECT_NAME_INVALID)
@@ -565,7 +546,7 @@ class DriveDevice(RdpdrDevice):
         fullpath = os.path.join(self.basePath, *parts) if parts else self.basePath
         if not self._isInside(fullpath):
             # a symlink / junction inside the share points outside of it
-            log.warning("RDPDR drive: path '%s' resolves outside of the shared directory, denied" % rawPath)
+            log.warning(u'RDPDR drive: path \'%s\' resolves outside of the shared directory, denied' % rawPath)
             raise _IrpError(STATUS_ACCESS_DENIED)
         return fullpath
 
@@ -625,16 +606,16 @@ class DriveDevice(RdpdrDevice):
                 information = FILE_OVERWRITTEN
             else:
                 information = FILE_SUPERSEDED
-            log.debug("RDPDR drive: create '%s' -> fileId=%d dir=%s" % (path, fileId, f.isDir))
+            log.debug(u'RDPDR drive: create \'%s\' -> fileId=%d dir=%s' % (path, fileId, f.isDir))
         except _IrpError as e:
             irp.ioStatus = e.status
             fileId = 0
         except OSError as e:
             irp.ioStatus = mapOSError(e)
             fileId = 0
-            log.debug("RDPDR drive: create '%s' failed: %s" % (path, e))
+            log.debug(u'RDPDR drive: create \'%s\' failed: %s' % (path, e))
 
-        irp.output += struct.pack('<IB', fileId, information)
+        irp.output += pack('<IB', fileId, information)
 
     def _openFile(self, fileId, fullpath, desiredAccess, createDisposition, createOptions,
                   fileAttributes):
@@ -645,14 +626,14 @@ class DriveDevice(RdpdrDevice):
             st = os.stat(fullpath)
             exists = True
         except OSError as e:
-            if isErrno(e, errno.ENOTDIR):
+            if isErrno(e, ENOTDIR):
                 raise _IrpError(STATUS_OBJECT_PATH_NOT_FOUND)
-            if not isErrno(e, errno.ENOENT):
+            if not isErrno(e, ENOENT):
                 raise
             exists = False
 
         if exists:
-            if stat.S_ISDIR(st.st_mode):
+            if S_ISDIR(st.st_mode):
                 if createDisposition == FILE_CREATE:
                     raise _IrpError(STATUS_OBJECT_NAME_COLLISION)
                 if createOptions & FILE_NON_DIRECTORY_FILE:
@@ -664,7 +645,7 @@ class DriveDevice(RdpdrDevice):
                 return f
             if createOptions & FILE_DIRECTORY_FILE:
                 raise _IrpError(STATUS_NOT_A_DIRECTORY)
-            if not stat.S_ISREG(st.st_mode):
+            if not S_ISREG(st.st_mode):
                 # FIFOs, sockets and devices could block the worker forever
                 raise _IrpError(STATUS_ACCESS_DENIED)
         else:
@@ -703,7 +684,7 @@ class DriveDevice(RdpdrDevice):
                 fd = os.open(fullpath, flags | os.O_RDWR, mode)
                 readable = True
             except OSError as e:
-                if wantRead or not isErrno(e, errno.EACCES, errno.EPERM):
+                if wantRead or not isErrno(e, EACCES, EPERM):
                     raise
                 # write-only access (e.g. a -w- file) does not need read permission
                 fd = os.open(fullpath, flags | os.O_WRONLY, mode)
@@ -712,7 +693,7 @@ class DriveDevice(RdpdrDevice):
                 fd = os.open(fullpath, flags | os.O_RDWR, mode)
                 readable = writable = True
             except OSError as e:
-                if not isErrno(e, errno.EACCES, errno.EPERM):
+                if not isErrno(e, EACCES, EPERM):
                     raise
                 fd = os.open(fullpath, flags | os.O_RDONLY, mode)
                 readable = True
@@ -723,7 +704,7 @@ class DriveDevice(RdpdrDevice):
             except OSError as e:
                 # Opening only for attributes / delete does not need read
                 # permission on the content.
-                if exists and not wantRead and isErrno(e, errno.EACCES, errno.EPERM):
+                if exists and not wantRead and isErrno(e, EACCES, EPERM):
                     fd = None
                 else:
                     raise
@@ -802,7 +783,7 @@ class DriveDevice(RdpdrDevice):
                 data = b''
         if data and f is not None:
             f.bytesRead += len(data)
-        irp.output += struct.pack('<I', len(data)) + data
+        irp.output += pack('<I', len(data)) + data
 
     def _irpWrite(self, irp):
         s = irp.input
@@ -840,7 +821,7 @@ class DriveDevice(RdpdrDevice):
             except OSError as e:
                 irp.ioStatus = mapOSError(e)
                 length = 0
-        irp.output += struct.pack('<IB', length, 0)  # Length + Padding
+        irp.output += pack('<IB', length, 0)  # Length + Padding
 
     # -------------------------------------------------------------------
     # IRP_MJ_QUERY_INFORMATION
@@ -851,20 +832,20 @@ class DriveDevice(RdpdrDevice):
         f = self._getFile(irp.fileId)
         if f is None:
             irp.ioStatus = STATUS_UNSUCCESSFUL
-            irp.output += struct.pack('<I', 0)
+            irp.output += pack('<I', 0)
             return
         try:
             st = f.stat()
         except OSError as e:
             irp.ioStatus = mapOSError(e)
-            irp.output += struct.pack('<I', 0)
+            irp.output += pack('<I', 0)
             return
 
         attr = fileAttributes(os.path.basename(f.fullpath), st)
-        isDir = stat.S_ISDIR(st.st_mode)
+        isDir = S_ISDIR(st.st_mode)
         size = 0 if isDir else st.st_size
         if infoClass == FileBasicInformation:
-            irp.output += struct.pack('<I', 36) + struct.pack(
+            irp.output += pack('<I', 36) + pack(
                 '<QQQQI',
                 toFiletime(_creationTime(st)),  # CreationTime
                 toFiletime(st.st_atime),  # LastAccessTime
@@ -872,7 +853,7 @@ class DriveDevice(RdpdrDevice):
                 toFiletime(st.st_mtime),  # ChangeTime
                 attr)  # FileAttributes (Reserved(4) MUST NOT be added)
         elif infoClass == FileStandardInformation:
-            irp.output += struct.pack('<I', 22) + struct.pack(
+            irp.output += pack('<I', 22) + pack(
                 '<QQIBB',
                 size,  # AllocationSize
                 size,  # EndOfFile
@@ -880,11 +861,11 @@ class DriveDevice(RdpdrDevice):
                 1 if f.deletePending else 0,  # DeletePending
                 1 if isDir else 0)  # Directory (Reserved(2) MUST NOT be added)
         elif infoClass == FileAttributeTagInformation:
-            irp.output += struct.pack('<III', 8, attr, 0)  # FileAttributes + ReparseTag
+            irp.output += pack('<III', 8, attr, 0)  # FileAttributes + ReparseTag
         else:
-            log.debug("RDPDR drive: unhandled FsInformationClass %d" % infoClass)
+            log.debug(u'RDPDR drive: unhandled FsInformationClass %d' % infoClass)
             irp.ioStatus = STATUS_NOT_SUPPORTED
-            irp.output += struct.pack('<I', 0)
+            irp.output += pack('<I', 0)
 
     # -------------------------------------------------------------------
     # IRP_MJ_SET_INFORMATION
@@ -910,13 +891,13 @@ class DriveDevice(RdpdrDevice):
                 elif infoClass == FileRenameInformation:
                     self._setRenameInformation(f, length, body)
                 else:
-                    log.debug("RDPDR drive: unhandled set FsInformationClass %d" % infoClass)
+                    log.debug(u'RDPDR drive: unhandled set FsInformationClass %d' % infoClass)
                     irp.ioStatus = STATUS_NOT_SUPPORTED
             except _IrpError as e:
                 irp.ioStatus = e.status
             except OSError as e:
                 irp.ioStatus = mapOSError(e)
-        irp.output += struct.pack('<I', length)
+        irp.output += pack('<I', length)
 
     def _setBasicInformation(self, f, length, s):
         if length != 36:
@@ -941,11 +922,11 @@ class DriveDevice(RdpdrDevice):
         if attributes:
             st = os.stat(f.fullpath)
             if attributes & FILE_ATTRIBUTE_READONLY:
-                mode = st.st_mode & ~(stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH)
+                mode = st.st_mode & ~(S_IWUSR | S_IWGRP | S_IWOTH)
             else:
-                mode = st.st_mode | stat.S_IWUSR
+                mode = st.st_mode | S_IWUSR
             if mode != st.st_mode:
-                os.chmod(f.fullpath, stat.S_IMODE(mode))
+                os.chmod(f.fullpath, S_IMODE(mode))
 
     def _setSize(self, f, infoClass, length, s):
         if length != 8:
@@ -1010,11 +991,11 @@ class DriveDevice(RdpdrDevice):
             try:
                 _replace(source, target)
             except OSError as e:
-                if e.errno != errno.EXDEV:
+                if e.errno != EXDEV:
                     raise
                 # MOVEFILE_COPY_ALLOWED: copy + delete, the open descriptors
                 # still point to the deleted original and must be reopened
-                shutil.move(source, target)
+                move(source, target)
                 crossDevice = True
             self._relocateHandles(source, target, crossDevice)
         finally:
@@ -1051,7 +1032,7 @@ class DriveDevice(RdpdrDevice):
         infoClass = irp.input.u32()
         clusterSize = _BYTES_PER_SECTOR * _SECTORS_PER_CLUSTER
         try:
-            usage = shutil.disk_usage(self.basePath)
+            usage = disk_usage(self.basePath)
             totalUnits = usage.total // clusterSize
             freeUnits = usage.free // clusterSize
         except OSError:
@@ -1064,29 +1045,29 @@ class DriveDevice(RdpdrDevice):
                 created = toFiletime(_creationTime(os.stat(self.basePath)))
             except OSError:
                 created = 0
-            serial = zlib.crc32(self.basePath.encode('utf-8', 'replace')) & 0xFFFFFFFF
-            out += struct.pack('<I', 17 + len(label))
-            out += struct.pack('<QIIB', created, serial, len(label), 0)  # Reserved(1) MUST NOT be added
+            serial = crc32(self.basePath.encode('utf-8', 'replace')) & 0xFFFFFFFF
+            out += pack('<I', 17 + len(label))
+            out += pack('<QIIB', created, serial, len(label), 0)  # Reserved(1) MUST NOT be added
             out += label
         elif infoClass == FileFsSizeInformation:
-            out += struct.pack('<I', 24)
-            out += struct.pack('<QQII', totalUnits, freeUnits, _SECTORS_PER_CLUSTER, _BYTES_PER_SECTOR)
+            out += pack('<I', 24)
+            out += pack('<QQII', totalUnits, freeUnits, _SECTORS_PER_CLUSTER, _BYTES_PER_SECTOR)
         elif infoClass == FileFsAttributeInformation:
             fsName = (FILE_SYSTEM_NAME + '\0').encode('utf-16-le')
-            out += struct.pack('<I', 12 + len(fsName))
-            out += struct.pack('<III', FILE_CASE_SENSITIVE_SEARCH | FILE_CASE_PRESERVED_NAMES |
+            out += pack('<I', 12 + len(fsName))
+            out += pack('<III', FILE_CASE_SENSITIVE_SEARCH | FILE_CASE_PRESERVED_NAMES |
                                FILE_UNICODE_ON_DISK, MAX_PATH, len(fsName))
             out += fsName
         elif infoClass == FileFsFullSizeInformation:
-            out += struct.pack('<I', 32)
-            out += struct.pack('<QQQII', totalUnits, freeUnits, freeUnits, _SECTORS_PER_CLUSTER,
+            out += pack('<I', 32)
+            out += pack('<QQQII', totalUnits, freeUnits, freeUnits, _SECTORS_PER_CLUSTER,
                                _BYTES_PER_SECTOR)
         elif infoClass == FileFsDeviceInformation:
-            out += struct.pack('<III', 8, FILE_DEVICE_DISK, 0)
+            out += pack('<III', 8, FILE_DEVICE_DISK, 0)
         else:
-            log.debug("RDPDR drive: unhandled FsInformationClass %d" % infoClass)
+            log.debug(u'RDPDR drive: unhandled FsInformationClass %d' % infoClass)
             irp.ioStatus = STATUS_UNSUCCESSFUL
-            out += struct.pack('<I', 0)
+            out += pack('<I', 0)
 
     # -------------------------------------------------------------------
     # IRP_MJ_LOCK_CONTROL / IRP_MJ_DEVICE_CONTROL
@@ -1108,7 +1089,7 @@ class DriveDevice(RdpdrDevice):
         numLocks = s.u32()
         s.skip(20)  # Padding2
         if numLocks * 16 > s.remaining():
-            raise ValueError("lock request announces %d locks for %d bytes" % (numLocks, s.remaining()))
+            raise ValueError(u'lock request announces %d locks for %d bytes' % (numLocks, s.remaining()))
         ranges = []
         for _ in range(numLocks):
             length = s.u64()
@@ -1131,7 +1112,7 @@ class DriveDevice(RdpdrDevice):
             irp.ioStatus = e.status
         except OSError as e:
             irp.ioStatus = mapOSError(e)
-        irp.output += struct.pack('<I', 0)  # Padding
+        irp.output += pack('<I', 0)  # Padding
 
     def _lockKey(self, f):
         """
@@ -1228,7 +1209,7 @@ class DriveDevice(RdpdrDevice):
         return 0
 
     def _irpDeviceControl(self, irp):
-        irp.output += struct.pack('<I', 0)  # OutputBufferLength
+        irp.output += pack('<I', 0)  # OutputBufferLength
 
     # -------------------------------------------------------------------
     # IRP_MJ_DIRECTORY_CONTROL
@@ -1240,7 +1221,7 @@ class DriveDevice(RdpdrDevice):
         else:
             # IRP_MN_NOTIFY_CHANGE_DIRECTORY is not implemented (as in FreeRDP)
             irp.ioStatus = STATUS_NOT_SUPPORTED
-            irp.output += struct.pack('<I', 0)
+            irp.output += pack('<I', 0)
 
     def _irpQueryDirectory(self, irp):
         s = irp.input
@@ -1253,7 +1234,7 @@ class DriveDevice(RdpdrDevice):
         f = self._getFile(irp.fileId)
         if f is None:
             irp.ioStatus = STATUS_UNSUCCESSFUL
-            irp.output += struct.pack('<I', 0)
+            irp.output += pack('<I', 0)
             return
 
         try:
@@ -1269,10 +1250,10 @@ class DriveDevice(RdpdrDevice):
             irp.output += self._encodeDirEntry(infoClass, entry)
         except _IrpError as e:
             irp.ioStatus = e.status
-            irp.output += struct.pack('<IB', 0, 0)  # Length + Padding
+            irp.output += pack('<IB', 0, 0)  # Length + Padding
         except OSError as e:
             irp.ioStatus = mapOSError(e)
-            irp.output += struct.pack('<IB', 0, 0)
+            irp.output += pack('<IB', 0, 0)
 
     def _findFirst(self, path):
         """
@@ -1285,17 +1266,17 @@ class DriveDevice(RdpdrDevice):
         if not pattern:
             pattern = '*'
 
-        if not re.search(r'[*?<>"]', pattern):
+        if not search(r'[*?<>"]', pattern):
             # no wildcard: a single, exact entry
             fullpath = self._resolvePath(path)
             st = os.lstat(fullpath)
-            if stat.S_ISLNK(st.st_mode):
+            if S_ISLNK(st.st_mode):
                 st = os.stat(fullpath)
             return [_FindEntry(os.path.basename(fullpath), st)]
 
         regex = _wildcardToRegex(pattern)
         dirStat = os.stat(directory)
-        if not stat.S_ISDIR(dirStat.st_mode):
+        if not S_ISDIR(dirStat.st_mode):
             raise _IrpError(STATUS_NOT_A_DIRECTORY)
 
         entries = []
@@ -1326,28 +1307,28 @@ class DriveDevice(RdpdrDevice):
     def _encodeDirEntry(self, infoClass, entry):
         st = entry.st
         nameW = entry.name.encode('utf-16-le', 'surrogatepass')
-        isDir = stat.S_ISDIR(st.st_mode)
+        isDir = S_ISDIR(st.st_mode)
         size = 0 if isDir else st.st_size
         attr = fileAttributes(entry.name, st)
-        times = struct.pack('<QQQQ',
+        times = pack('<QQQQ',
                             toFiletime(_creationTime(st)),  # CreationTime
                             toFiletime(st.st_atime),  # LastAccessTime
                             toFiletime(st.st_mtime),  # LastWriteTime
                             toFiletime(st.st_mtime))  # ChangeTime
-        sizes = struct.pack('<QQI', size, size, attr)  # EndOfFile, AllocationSize, FileAttributes
-        header = struct.pack('<II', 0, 0)  # NextEntryOffset, FileIndex
+        sizes = pack('<QQI', size, size, attr)  # EndOfFile, AllocationSize, FileAttributes
+        header = pack('<II', 0, 0)  # NextEntryOffset, FileIndex
 
         if infoClass == FileDirectoryInformation:
-            body = header + times + sizes + struct.pack('<I', len(nameW)) + nameW
+            body = header + times + sizes + pack('<I', len(nameW)) + nameW
         elif infoClass == FileFullDirectoryInformation:
-            body = header + times + sizes + struct.pack('<II', len(nameW), 0) + nameW  # + EaSize
+            body = header + times + sizes + pack('<II', len(nameW), 0) + nameW  # + EaSize
         elif infoClass == FileBothDirectoryInformation:
-            body = (header + times + sizes + struct.pack('<II', len(nameW), 0) +
-                    struct.pack('<B', 0) +  # ShortNameLength (Reserved(1) MUST NOT be added)
+            body = (header + times + sizes + pack('<II', len(nameW), 0) +
+                    pack('<B', 0) +  # ShortNameLength (Reserved(1) MUST NOT be added)
                     b'\x00' * 24 + nameW)  # ShortName
         elif infoClass == FileNamesInformation:
-            body = header + struct.pack('<I', len(nameW)) + nameW
+            body = header + pack('<I', len(nameW)) + nameW
         else:
-            log.debug("RDPDR drive: unhandled directory FsInformationClass %d" % infoClass)
+            log.debug(u'RDPDR drive: unhandled directory FsInformationClass %d' % infoClass)
             raise _IrpError(STATUS_NOT_SUPPORTED)
-        return struct.pack('<I', len(body)) + body
+        return pack('<I', len(body)) + body

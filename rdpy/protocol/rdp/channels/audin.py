@@ -17,26 +17,23 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 AUDIO_INPUT - Audio Input Redirection Virtual Channel (MS-RDPEAI): the local
 microphone is sent to the server, which uses it as its own microphone.
-
 Ported from FreeRDP channels/audin/client/audin_main.c. The server opens the
 "AUDIO_INPUT" dynamic channel (when the client sets INFO_AUDIOCAPTURE),
 offers formats, then opens the device with one of them; the client answers
 and streams Incoming Data + Data PDUs of FramesPerPacket frames.
-
 Only PCM formats are accepted (no audio encoder is involved); the capture
 itself runs in audio_out.AudioInput on the Qt audio thread.
 """
 from __future__ import absolute_import, division, print_function
-import struct
-import rdpy.core.log as log
+from struct import error, pack, unpack_from
+from rdpy.protocol.rdp.channels.rdpsnd import AudioFormat, WAVE_FORMAT_PCM
 from rdpy.protocol.rdp import audio_out
-from rdpy.protocol.rdp.rdpsnd import AudioFormat, WAVE_FORMAT_PCM
+from rdpy.core import log
 
-CHANNEL_NAME = "AUDIO_INPUT"
+CHANNEL_NAME = u'AUDIO_INPUT'
 MSG_SNDIN_VERSION = 0x01
 MSG_SNDIN_FORMATS = 0x02
 MSG_SNDIN_OPEN = 0x03
@@ -86,21 +83,21 @@ class AudinChannel(object):
             elif msgId == MSG_SNDIN_FORMATCHANGE:
                 self._onFormatChange(body)
             else:
-                log.debug("AUDIN: unknown message 0x%02x" % msgId)
-        except struct.error as e:
-            log.warning("AUDIN: malformed message 0x%02x: %s" % (msgId, e))
+                log.debug(u'AUDIN: unknown message 0x%02x' % msgId)
+        except error as e:
+            log.warning(u'AUDIN: malformed message 0x%02x: %s' % (msgId, e))
 
     def _onVersion(self, body):
-        serverVersion = struct.unpack_from('<I', body, 0)[0]
+        serverVersion = unpack_from('<I', body, 0)[0]
         if serverVersion > SNDIN_VERSION:
-            log.warning("AUDIN: unsupported server version %d" % serverVersion)
+            log.warning(u'AUDIN: unsupported server version %d' % serverVersion)
             return  # FreeRDP does not answer either
-        self._send(struct.pack('<BI', MSG_SNDIN_VERSION, SNDIN_VERSION))
+        self._send(pack('<BI', MSG_SNDIN_VERSION, SNDIN_VERSION))
 
     def _onFormats(self, body):
-        count = struct.unpack_from('<I', body, 0)[0]
+        count = unpack_from('<I', body, 0)[0]
         if count < 1 or count > 1000:
-            raise struct.error("bad format count %d" % count)
+            raise error(u'bad format count %d' % count)
         self.close()
         offset = 8  # NumFormats + cbSizeFormatsPacket
         self._formats = []
@@ -112,29 +109,29 @@ class AudinChannel(object):
                     fmt.channels in (1, 2) and 8000 <= fmt.samples_per_sec <= 96000):
                 self._formats.append(fmt)
         packed = b''.join(f.pack() for f in self._formats)
-        self._send(struct.pack('<B', MSG_SNDIN_DATA_INCOMING))
-        self._send(struct.pack('<BII', MSG_SNDIN_FORMATS, len(self._formats), 9 + len(packed)) + packed)
-        log.debug("AUDIN: %d of %d formats accepted" % (len(self._formats), count))
+        self._send(pack('<B', MSG_SNDIN_DATA_INCOMING))
+        self._send(pack('<BII', MSG_SNDIN_FORMATS, len(self._formats), 9 + len(packed)) + packed)
+        log.debug(u'AUDIN: %d of %d formats accepted' % (len(self._formats), count))
         if not self._formats:
-            log.warning("AUDIN: the server offered no PCM format, microphone unavailable")
+            log.warning(u'AUDIN: the server offered no PCM format, microphone unavailable')
 
     def _onOpen(self, body):
-        framesPerPacket, initialFormat = struct.unpack_from('<II', body, 0)
+        framesPerPacket, initialFormat = unpack_from('<II', body, 0)
         if initialFormat >= len(self._formats):
-            raise struct.error("bad format index %d" % initialFormat)
+            raise error(u'bad format index %d' % initialFormat)
         self._framesPerPacket = min(max(framesPerPacket, 1), 1 << 20)
         self._openDevice(self._formats[initialFormat])
-        self._send(struct.pack('<BI', MSG_SNDIN_FORMATCHANGE, initialFormat))
-        self._send(struct.pack('<BI', MSG_SNDIN_OPEN_REPLY, 0))
+        self._send(pack('<BI', MSG_SNDIN_FORMATCHANGE, initialFormat))
+        self._send(pack('<BI', MSG_SNDIN_OPEN_REPLY, 0))
 
     def _onFormatChange(self, body):
-        newFormat = struct.unpack_from('<I', body, 0)[0]
+        newFormat = unpack_from('<I', body, 0)[0]
         if newFormat >= len(self._formats):
-            raise struct.error("bad format index %d" % newFormat)
+            raise error(u'bad format index %d' % newFormat)
         fmt = self._formats[newFormat]
         if self._format is None or fmt.pack() != self._format.pack():
             self._openDevice(fmt)
-        self._send(struct.pack('<BI', MSG_SNDIN_FORMATCHANGE, newFormat))
+        self._send(pack('<BI', MSG_SNDIN_FORMATCHANGE, newFormat))
 
     # --- capture ---
 
@@ -145,11 +142,11 @@ class AudinChannel(object):
         pcm = audio_out.PcmFormat(fmt.samples_per_sec, fmt.channels, 'u8' if fmt.bits_per_sample == 8 else 's16')
         capture = self._capture or audio_out.AudioInput.instance()
         if capture is None:
-            log.warning("AUDIN: no audio input available")
+            log.warning(u'AUDIN: no audio input available')
             return
         self._capture = capture
         self._token = capture.start(pcm, self._onCaptured)
-        log.info("microphone: sending %d Hz, %d channel(s), %d-bit to the server" %
+        log.info(u'microphone: sending %d Hz, %d channel(s), %d-bit to the server' %
                  (fmt.samples_per_sec, fmt.channels, fmt.bits_per_sample))
 
     def _onCaptured(self, token, data):
@@ -168,8 +165,8 @@ class AudinChannel(object):
         while len(self._pending) >= packet:
             chunk = bytes(self._pending[:packet])
             del self._pending[:packet]
-            self._send(struct.pack('<B', MSG_SNDIN_DATA_INCOMING))
-            self._send(struct.pack('<B', MSG_SNDIN_DATA) + chunk)
+            self._send(pack('<B', MSG_SNDIN_DATA_INCOMING))
+            self._send(pack('<B', MSG_SNDIN_DATA) + chunk)
 
     def close(self):
         """Stop the capture (channel closed, new formats, session end)."""

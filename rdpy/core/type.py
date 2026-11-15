@@ -24,11 +24,11 @@ We are in python!
 """
 from __future__ import absolute_import, division, print_function
 from rdpy.core.compat import intFromBytes, intToBytes, hexlify, PY2, pybytes
-import struct
+from struct import Struct
 from copy import deepcopy
 from io import BytesIO
 from rdpy.core.error import InvalidExpectedDataException, InvalidSize, CallPureVirtualFuntion, InvalidValue
-import rdpy.core.log as log
+from rdpy.core import log
 
 # Pre-compiled struct cache — avoids reparsing format strings on every pack/unpack
 _STRUCT_CACHE = {}
@@ -40,11 +40,11 @@ def _ALWAYS_TRUE():
 
 
 # Pre-compiled structs for fast Stream read methods
-_STRUCT_UINT8 = struct.Struct('B')
-_STRUCT_UINT16LE = struct.Struct('<H')
-_STRUCT_UINT16BE = struct.Struct('>H')
-_STRUCT_UINT32LE = struct.Struct('<I')
-_STRUCT_SINT16LE = struct.Struct('<h')
+_STRUCT_UINT8 = Struct('B')
+_STRUCT_UINT16LE = Struct('<H')
+_STRUCT_UINT16BE = Struct('>H')
+_STRUCT_UINT32LE = Struct('<I')
+_STRUCT_SINT16LE = Struct('<h')
 
 
 def _get_struct(fmt):
@@ -52,7 +52,7 @@ def _get_struct(fmt):
     try:
         return _STRUCT_CACHE[fmt]
     except KeyError:
-        s = struct.Struct(fmt)
+        s = Struct(fmt)
         _STRUCT_CACHE[fmt] = s
         return s
 
@@ -134,28 +134,28 @@ class Type(object):
             #rollback read value
             s.pos -= sizeof(self)
             raise InvalidExpectedDataException(
-                "%s const value expected %s != %s" % (self.__class__, old_value, self.value))
+                u'%s const value expected %s != %s' % (self.__class__, old_value, self.value))
 
     def __read__(self, s):
         """
         @summary: Interface definition of private read function
         @param s: Stream 
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "__read__", "Type"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'__read__', u'Type'))
 
     def __write__(self, s):
         """
         @summary: Interface definition of private write function
         @param s: Stream 
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "__write__", "Type"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'__write__', u'Type'))
 
     def __sizeof__(self):
         """
         @summary: Return size of type use for sizeof function
         @return: size in byte of type
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "__sizeof__", "Type"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'__sizeof__', u'Type'))
 
 
 class CallableValue(object):
@@ -257,7 +257,7 @@ class SimpleType(Type, CallableValue):
         #and evaluate a this time
 
         if not self.isInRange(value):
-            raise InvalidValue("value is out of range for %s" % self.__class__)
+            raise InvalidValue(u'value is out of range for %s' % self.__class__)
         if self._signed:
             return value
         else:
@@ -273,7 +273,7 @@ class SimpleType(Type, CallableValue):
         """
         #check static value range
         if not callable(value) and not self.isInRange(value):
-            raise InvalidValue("value is out of range for %s" % self.__class__)
+            raise InvalidValue(u'value is out of range for %s' % self.__class__)
 
         CallableValue.__setValue__(self, value)
 
@@ -295,7 +295,7 @@ class SimpleType(Type, CallableValue):
         @raise InvalidSize: if there is not enough data in stream
         """
         if s.dataLen() < self._typeSize:
-            raise InvalidSize("Stream is too small to read expected SimpleType")
+            raise InvalidSize(u'Stream is too small to read expected SimpleType')
         self.value = self._struct.unpack(s.read(self._typeSize))[0]
 
     def mask(self):
@@ -502,10 +502,10 @@ class CompositeType(Type):
                     s.pos -= fieldSize
                     #and notify if not optional
                     if not self.__dict__[name]._optional:
-                        raise InvalidSize("Impossible to read type %s : read length is too small" % (self.__class__))
+                        raise InvalidSize(u'Impossible to read type %s : read length is too small' % (self.__class__))
 
             except Exception as e:
-                log.error("Error during read %s::%s" % (self.__class__, name))
+                log.error(u'Error during read %s::%s' % (self.__class__, name))
                 #roll back already read
                 for tmpName in self._typeName:
                     if tmpName == name:
@@ -514,7 +514,7 @@ class CompositeType(Type):
                 raise e
 
         if readLenLimit is not None and readLen < readLenLimit:
-            log.debug("Still have correct data in packet %s, read %s bytes as padding" % (self.__class__,
+            log.debug(u'Still have correct data in packet %s, read %s bytes as padding' % (self.__class__,
                                                                                           readLenLimit - readLen))
             s.read(readLenLimit - readLen)
 
@@ -528,7 +528,7 @@ class CompositeType(Type):
             try:
                 s.writeType(self.__dict__[name])
             except Exception as e:
-                log.error("Error during write %s::%s" % (self.__class__, name))
+                log.error(u'Error during write %s::%s' % (self.__class__, name))
                 raise e
 
     def __sizeof__(self):
@@ -586,7 +586,7 @@ class UInt8(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, "B", 1, False, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'B', 1, False, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class SInt8(SimpleType):
@@ -603,7 +603,7 @@ class SInt8(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, "b", 1, True, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'b', 1, True, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class UInt16Be(SimpleType):
@@ -621,7 +621,7 @@ class UInt16Be(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, ">H", 2, False, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'>H', 2, False, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class UInt16Le(SimpleType):
@@ -639,7 +639,7 @@ class UInt16Le(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, "<H", 2, False, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'<H', 2, False, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class SInt16Le(SimpleType):
@@ -657,7 +657,7 @@ class SInt16Le(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, "<h", 2, True, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'<h', 2, True, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class UInt32Be(SimpleType):
@@ -675,7 +675,7 @@ class UInt32Be(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, ">I", 4, False, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'>I', 4, False, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class UInt32Le(SimpleType):
@@ -693,7 +693,7 @@ class UInt32Le(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, "<I", 4, False, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'<I', 4, False, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class SInt32Le(SimpleType):
@@ -711,7 +711,7 @@ class SInt32Le(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, "<I", 4, True, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'<I', 4, True, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class SInt32Be(SimpleType):
@@ -729,7 +729,7 @@ class SInt32Be(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, ">I", 4, True, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'>I', 4, True, value, conditional=conditional, optional=optional, constant=constant)
 
 
 class UInt24Be(SimpleType):
@@ -747,7 +747,7 @@ class UInt24Be(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, ">I", 3, False, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'>I', 3, False, value, conditional=conditional, optional=optional, constant=constant)
 
     def __write__(self, s):
         """
@@ -779,7 +779,7 @@ class UInt24Le(SimpleType):
                             And optional is True, read type is ignored
         @param constant:   Check if object value doesn't change after read operation
         """
-        SimpleType.__init__(self, "<I", 3, False, value, conditional=conditional, optional=optional, constant=constant)
+        SimpleType.__init__(self, u'<I', 3, False, value, conditional=conditional, optional=optional, constant=constant)
 
     def __write__(self, s):
         """
@@ -802,7 +802,7 @@ class String(Type, CallableValue):
                 Leaf in Type tree
     """
 
-    def __init__(self, value=b"", readLen=None, conditional=_ALWAYS_TRUE, optional=False, constant=False, unicode=False,
+    def __init__(self, value=b'', readLen=None, conditional=_ALWAYS_TRUE, optional=False, constant=False, unicode=False,
                  until=None):
         """
         @param value: python string use for inner value
@@ -843,7 +843,7 @@ class String(Type, CallableValue):
         @return: inner python string
         """
         if self._unicode:
-            return self.value.decode("utf-16-le")
+            return self.value.decode(u'utf-16-le')
         try:
             return self.value.decode('utf-8')
         except UnicodeDecodeError:
@@ -863,10 +863,10 @@ class String(Type, CallableValue):
         if self._unicode:
             v = self.value
             if hasattr(v, 'encode'):
-                v = self.value.encode("utf-16-le")
+                v = self.value.encode(u'utf-16-le')
             if self._readLen is not None:
                 ln = self._readLen.value
-                v = (v + b"\x00" * ln)[:ln]
+                v = (v + b'\x00' * ln)[:ln]
         else:
             v = self.value
         s.write(v)
@@ -917,9 +917,8 @@ def encodeUnicode(s):
     """
     # FIX ME
     if s == b'':
-        return b"\x00\x00"
-
-    return s.encode("utf-16-le") + b"\x00\x00"
+        return b'\x00\x00'
+    return s.encode(u'utf-16-le') + b'\x00\x00'
 
 
 def decodeUnicode(s):
@@ -928,7 +927,7 @@ def decodeUnicode(s):
     @param s: unicode string
     @return: str python
     """
-    return s[:-2].decode("utf-16-le")
+    return s[:-2].decode(u'utf-16-le')
 
 
 class Stream(BytesIO):
@@ -1179,7 +1178,7 @@ def CheckValueOnRead(cls):
         old = deepcopy(self)
         oldRead(self, s)
         if self != old:
-            raise InvalidValue("CheckValueOnRead %s != %s" % (self, old))
+            raise InvalidValue(u'CheckValueOnRead %s != %s' % (self, old))
 
     cls.read = read
     return cls

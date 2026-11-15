@@ -24,22 +24,22 @@ Implement GCC structure use in RDP protocol
 https://msdn.microsoft.com/en-us/library/cc240508.aspx
 """
 from __future__ import absolute_import, division, print_function
-
-import hashlib
-from rdpy.core.type import UInt8, UInt16Le, UInt32Le, CompositeType, CallableValue, String, Stream, sizeof, FactoryType, \
-    ArrayType
+from hashlib import md5
+from rdpy.core.type import UInt8, UInt16Le, UInt32Le, CompositeType, CallableValue, String, Stream, sizeof, ArrayType, \
+    FactoryType
 from . import per
 from rdpy.core.compat import LazyModule
-mcs = LazyModule('rdpy.protocol.rdp.t125.mcs')  # circular import (mcs imports gcc)
+
+mcs = LazyModule('rdpy.protocol.rdp.t125.mcs')  # Circular import (mcs imports gcc).
+from rdpy.security.rsa_wrapper import verify, sign, PublicKey, PrivateKey
 from rdpy.core.error import InvalidExpectedDataException
-from rdpy.core import log
 from rdpy.security import x509
-import rdpy.security.rsa_wrapper as rsa
+from rdpy.core import log
 
 t124_02_98_oid = (0, 0, 20, 124, 0, 1)
 
-h221_cs_key = b"Duca";
-h221_sc_key = b"McDn";
+h221_cs_key = b'Duca'
+h221_sc_key = b'McDn'
 
 
 class MessageType(object):
@@ -252,14 +252,14 @@ class DataBlock(CompositeType):
                       ServerCoreData, ServerNetworkData, ServerSecurityData, ServerMessageChannelData]:
                 if self.type.value == c._TYPE_:
                     return c(readLen=self.length - 4)
-            log.debug("unknown GCC block type : %s" % hex(self.type.value))
+            log.debug(u'unknown GCC block type : %s' % hex(self.type.value))
             #read entire packet
             return String(readLen=self.length - 4)
 
         if dataBlock is None:
             dataBlock = FactoryType(DataBlockFactory)
-        elif not "_TYPE_" in dataBlock.__class__.__dict__:
-            raise InvalidExpectedDataException("Try to send an invalid GCC blocks")
+        elif not u'_TYPE_' in dataBlock.__class__.__dict__:
+            raise InvalidExpectedDataException(u'Try to send an invalid GCC blocks')
 
         self.dataBlock = dataBlock
 
@@ -281,11 +281,11 @@ class ClientCoreData(CompositeType):
         self.sasSequence = UInt16Le(Sequence.RNS_UD_SAS_DEL)
         self.kbdLayout = UInt32Le(KeyboardLayout.US)
         self.clientBuild = UInt32Le(22621)
-        self.clientName = String(("rdpy".encode("utf_16_le") + b"\x00" * 32)[:32], readLen=CallableValue(32))
+        self.clientName = String((u'rdpy'.encode(u'utf_16_le') + b'\x00' * 32)[:32], readLen=CallableValue(32))
         self.keyboardType = UInt32Le(KeyboardType.IBM_101_102_KEYS)
         self.keyboardSubType = UInt32Le(0)
         self.keyboardFnKeys = UInt32Le(12)
-        self.imeFileName = String(b"\x00" * 64, readLen=CallableValue(64), optional=True)
+        self.imeFileName = String(b'\x00' * 64, readLen=CallableValue(64), optional=True)
         self.postBeta2ColorDepth = UInt16Le(ColorDepth.RNS_UD_COLOR_8BPP, optional=True)
         self.clientProductId = UInt16Le(1, optional=True)
         self.serialNumber = UInt32Le(0, optional=True)
@@ -296,7 +296,7 @@ class ClientCoreData(CompositeType):
         self.earlyCapabilityFlags = UInt16Le(
             CapabilityFlags.RNS_UD_CS_SUPPORT_ERRINFO_PDU | CapabilityFlags.RNS_UD_CS_WANT_32BPP_SESSION | CapabilityFlags.RNS_UD_CS_VALID_CONNECTION_TYPE | CapabilityFlags.RNS_UD_CS_SUPPORT_NETCHAR_AUTODETECT | CapabilityFlags.RNS_UD_CS_SUPPORT_DYNVC_GFX_PROTOCOL,
             optional=True)
-        self.clientDigProductId = String(b"\x00" * 64, readLen=CallableValue(64), optional=True)
+        self.clientDigProductId = String(b'\x00' * 64, readLen=CallableValue(64), optional=True)
         self.connectionType = UInt8(ConnectionType.CONNECTION_TYPE_LAN, optional=True)
         self.pad1octet = UInt8(optional=True)
         self.serverSelectedProtocol = UInt32Le(optional=True)
@@ -358,7 +358,7 @@ class ServerSecurityData(CompositeType):
     _TYPE_ = MessageType.SC_SECURITY
 
     def __init__(self, readLen=None):
-        log.debug("gcc.ServerSecurityData.__init__()")
+        log.debug(u'gcc.ServerSecurityData.__init__()')
         CompositeType.__init__(self, readLen=readLen)
         self.encryptionMethod = UInt32Le()
         self.encryptionLevel = UInt32Le()
@@ -388,12 +388,12 @@ class ServerCertificate(CompositeType):
             for c in [ProprietaryServerCertificate, X509CertificateChain]:
                 if self.dwVersion.value & 0x7fffffff == c._TYPE_:
                     return c()
-            raise InvalidExpectedDataException("unknown certificate type : %s " % hex(self.dwVersion.value))
+            raise InvalidExpectedDataException(u'unknown certificate type : %s ' % hex(self.dwVersion.value))
 
         if certData is None:
             certData = FactoryType(CertificateFactory)
-        elif not "_TYPE_" in certData.__class__.__dict__:
-            raise InvalidExpectedDataException("Try to send an invalid Certificate")
+        elif not u'_TYPE_' in certData.__class__.__dict__:
+            raise InvalidExpectedDataException(u'Try to send an invalid Certificate')
 
         self.certData = certData
 
@@ -406,9 +406,9 @@ class ProprietaryServerCertificate(CompositeType):
     _TYPE_ = CertificateType.CERT_CHAIN_VERSION_1
 
     #https://msdn.microsoft.com/en-us/library/cc240776.aspx
-    _TERMINAL_SERVICES_MODULUS_ = b"\x3d\x3a\x5e\xbd\x72\x43\x3e\xc9\x4d\xbb\xc1\x1e\x4a\xba\x5f\xcb\x3e\x88\x20\x87\xef\xf5\xc1\xe2\xd7\xb7\x6b\x9a\xf2\x52\x45\x95\xce\x63\x65\x6b\x58\x3a\xfe\xef\x7c\xe7\xbf\xfe\x3d\xf6\x5c\x7d\x6c\x5e\x06\x09\x1a\xf5\x61\xbb\x20\x93\x09\x5f\x05\x6d\xea\x87"
-    _TERMINAL_SERVICES_PRIVATE_EXPONENT_ = b"\x87\xa7\x19\x32\xda\x11\x87\x55\x58\x00\x16\x16\x25\x65\x68\xf8\x24\x3e\xe6\xfa\xe9\x67\x49\x94\xcf\x92\xcc\x33\x99\xe8\x08\x60\x17\x9a\x12\x9f\x24\xdd\xb1\x24\x99\xc7\x3a\xb8\x0a\x7b\x0d\xdd\x35\x07\x79\x17\x0b\x51\x9b\xb3\xc7\x10\x01\x13\xe7\x3f\xf3\x5f"
-    _TERMINAL_SERVICES_PUBLIC_EXPONENT_ = b"\x5b\x7b\x88\xc0"
+    _TERMINAL_SERVICES_MODULUS_ = b'\x3d\x3a\x5e\xbd\x72\x43\x3e\xc9\x4d\xbb\xc1\x1e\x4a\xba\x5f\xcb\x3e\x88\x20\x87\xef\xf5\xc1\xe2\xd7\xb7\x6b\x9a\xf2\x52\x45\x95\xce\x63\x65\x6b\x58\x3a\xfe\xef\x7c\xe7\xbf\xfe\x3d\xf6\x5c\x7d\x6c\x5e\x06\x09\x1a\xf5\x61\xbb\x20\x93\x09\x5f\x05\x6d\xea\x87'
+    _TERMINAL_SERVICES_PRIVATE_EXPONENT_ = b'\x87\xa7\x19\x32\xda\x11\x87\x55\x58\x00\x16\x16\x25\x65\x68\xf8\x24\x3e\xe6\xfa\xe9\x67\x49\x94\xcf\x92\xcc\x33\x99\xe8\x08\x60\x17\x9a\x12\x9f\x24\xdd\xb1\x24\x99\xc7\x3a\xb8\x0a\x7b\x0d\xdd\x35\x07\x79\x17\x0b\x51\x9b\xb3\xc7\x10\x01\x13\xe7\x3f\xf3\x5f'
+    _TERMINAL_SERVICES_PUBLIC_EXPONENT_ = b'\x5b\x7b\x88\xc0'
 
     def __init__(self):
         CompositeType.__init__(self)
@@ -421,15 +421,15 @@ class ProprietaryServerCertificate(CompositeType):
         self.wSignatureBlobLen = UInt16Le(lambda: (sizeof(self.SignatureBlob) + sizeof(self.padding)))
         self.SignatureBlob = String(
             readLen=CallableValue(lambda: (self.wSignatureBlobLen.value - sizeof(self.padding))))
-        self.padding = String(b"\x00" * 8, readLen=CallableValue(8))
+        self.padding = String(b'\x00' * 8, readLen=CallableValue(8))
 
     def getPublicKey(self):
         """
         @return: {Tuple} (modulus, publicExponent)
         """
-        log.debug("read RSA public key from proprietary certificate")
+        log.debug(u'read RSA public key from proprietary certificate')
         #reverse because bignum in little endian
-        return rsa.PublicKey(self.PublicKeyBlob.pubExp.value, self.PublicKeyBlob.modulus.value[::-1])
+        return PublicKey(self.PublicKeyBlob.pubExp.value, self.PublicKeyBlob.modulus.value[::-1])
 
     def computeSignatureHash(self):
         """
@@ -443,14 +443,14 @@ class ProprietaryServerCertificate(CompositeType):
         s.writeType(self.wPublicKeyBlobLen)
         s.writeType(self.PublicKeyBlob)
 
-        return hashlib.md5(s.getvalue()).digest() + b"\x00" + b"\xff" * 45 + b"\x01"
+        return md5(s.getvalue()).digest() + b'\x00' + b'\xff' * 45 + b'\x01'
 
     def sign(self):
         """
         @summary: sign proprietary certificate
         @see: https://msdn.microsoft.com/en-us/library/cc240778.aspx
         """
-        self.SignatureBlob.value = rsa.sign(self.computeSignatureHash()[::-1], rsa.PrivateKey(
+        self.SignatureBlob.value = sign(self.computeSignatureHash()[::-1], PrivateKey(
             d=ProprietaryServerCertificate._TERMINAL_SERVICES_PRIVATE_EXPONENT_[::-1],
             n=ProprietaryServerCertificate._TERMINAL_SERVICES_MODULUS_[::-1]))[::-1]
 
@@ -458,9 +458,9 @@ class ProprietaryServerCertificate(CompositeType):
         """
         @summary: verify certificate signature
         """
-        return rsa.verify(self.SignatureBlob.value[::-1],
-                          rsa.PublicKey(e=ProprietaryServerCertificate._TERMINAL_SERVICES_PUBLIC_EXPONENT_[::-1],
-                                        n=ProprietaryServerCertificate._TERMINAL_SERVICES_MODULUS_[::-1]))[
+        return verify(self.SignatureBlob.value[::-1], PublicKey(
+            e=ProprietaryServerCertificate._TERMINAL_SERVICES_PUBLIC_EXPONENT_[::-1],
+            n=ProprietaryServerCertificate._TERMINAL_SERVICES_MODULUS_[::-1]))[
             ::-1] == self.computeSignatureHash()
 
 
@@ -493,10 +493,10 @@ class X509CertificateChain(CompositeType):
         """
         @return: {Tuple} (modulus, publicExponent)
         """
-        log.debug("read RSA public key from x509 certificate")
+        log.debug(u'read RSA public key from x509 certificate')
         #last certifcate contain public key
         n, e = x509.extractRSAKey(x509.load(self.CertBlobArray[-1].abCert.value))
-        return rsa.PublicKey(e, n)
+        return PublicKey(e, n)
 
     def verify(self):
         """
@@ -519,7 +519,7 @@ class RSAPublicKey(CompositeType):
         self.datalen = UInt32Le(lambda: ((self.bitlen.value // 8) - 1))
         self.pubExp = UInt32Le()
         self.modulus = String(readLen=CallableValue(lambda: (self.keylen.value - 8)))
-        self.padding = String(b"\x00" * 8, readLen=CallableValue(8))
+        self.padding = String(b'\x00' * 8, readLen=CallableValue(8))
 
 
 class ChannelDef(CompositeType):
@@ -528,10 +528,10 @@ class ChannelDef(CompositeType):
     @see: https://msdn.microsoft.com/en-us/library/cc240513.aspx
     """
 
-    def __init__(self, name=b"", options=0):
+    def __init__(self, name=b'', options=0):
         CompositeType.__init__(self)
         #name of channel
-        self.name = String(name[0:8] + b"\x00" * (8 - len(name)), readLen=CallableValue(8))
+        self.name = String(name[0:8] + b'\x00' * (8 - len(name)), readLen=CallableValue(8))
         self.options = UInt32Le(options)
 
 
@@ -626,7 +626,7 @@ def clientSettings():
     @summary: Build settings for client
     @return: Settings
     """
-    log.debug("gcc.clientSettings()")
+    log.debug(u'gcc.clientSettings()')
     #    return Settings([ClientCoreData(), ClientClusterData(), ClientSecurityData(), ClientNetworkData()])
     return Settings([ClientCoreData(), ClientNetworkData(), ClientSecurityData(), ClientMessageChannelData()])
 
@@ -636,7 +636,7 @@ def serverSettings():
     @summary: Build settings for server
     @return Settings
     """
-    log.debug("gcc.Settings.serverSettings()")
+    log.debug(u'gcc.Settings.serverSettings()')
     return Settings([ServerCoreData(), ServerSecurityData(), ServerNetworkData()])
 
 
@@ -647,7 +647,7 @@ def readConferenceCreateRequest(s):
     @param s: Stream
     @param client settings (Settings)
     """
-    log.debug("gcc.Settings.readConferenceCreateRequest()")
+    log.debug(u'gcc.Settings.readConferenceCreateRequest()')
     per.readChoice(s)
     per.readObjectIdentifier(s, t124_02_98_oid)
     per.readLength(s)
@@ -657,10 +657,10 @@ def readConferenceCreateRequest(s):
     per.readPadding(s, 1)
 
     if per.readNumberOfSet(s) != 1:
-        raise InvalidExpectedDataException("Invalid number of set in readConferenceCreateRequest")
+        raise InvalidExpectedDataException(u'Invalid number of set in readConferenceCreateRequest')
 
     if per.readChoice(s) != 0xc0:
-        raise InvalidExpectedDataException("Invalid choice in readConferenceCreateRequest")
+        raise InvalidExpectedDataException(u'Invalid choice in readConferenceCreateRequest')
 
     per.readOctetStream(s, h221_cs_key, 4)
     length = per.readLength(s)
@@ -688,7 +688,7 @@ def readConferenceCreateResponse(s):
     per.readNumberOfSet(s)
     per.readChoice(s)
     if not per.readOctetStream(s, h221_sc_key, 4):
-        raise InvalidExpectedDataException("cannot read h221_sc_key")
+        raise InvalidExpectedDataException(u'cannot read h221_sc_key')
 
     length = per.readLength(s)
 
@@ -708,12 +708,12 @@ def writeConferenceCreateRequest(userData):
     userDataStream = Stream()
     userDataStream.writeType(userData)
     # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/2610fcc7-3df4-4166-85bb-2c7ae21f6151
-    import binascii
+    from binascii import hexlify
     data = userDataStream.getvalue()
-    log.debug('writeConferenceCreateRequest {} {}'.format(binascii.hexlify(data).decode('utf-8'), len(data)))
+    log.debug('writeConferenceCreateRequest {} {}'.format(hexlify(data).decode('utf-8'), len(data)))
     return (per.writeChoice(0), per.writeObjectIdentifier(t124_02_98_oid),
             per.writeLength(len(userDataStream.getvalue()) + 14), per.writeChoice(0),
-            per.writeSelection(0x08), per.writeNumericString("1", 1), per.writePadding(1),
+            per.writeSelection(0x08), per.writeNumericString(u'1', 1), per.writePadding(1),
             per.writeNumberOfSet(1), per.writeChoice(0xc0),
             per.writeOctetStream(h221_cs_key, 4), per.writeOctetStream(userDataStream.getvalue()))
 

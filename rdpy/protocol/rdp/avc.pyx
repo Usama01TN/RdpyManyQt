@@ -39,17 +39,16 @@ Wire formats per MS-RDPEGFX:
       avc420EncodedBitstream1 + avc420EncodedBitstream2(optional)
   AVC444v2 (2.2.4.6): same structure as AVC444, different chroma handling
 """
-
-import os
-import struct
-import sys
-import time
-import numpy as np
+from numpy import array, empty, float32, frombuffer, uint16, uint8, zeros
+from struct import unpack_from
+from time import monotonic
+from sys import platform
+from os import cpu_count
 # typed memoryviews only: no NumPy C API, so NumPy is not a build dependency
 # (iOS / Android cross builds have no target NumPy to compile against)
 from libc.stdint cimport uint8_t, uint16_t
 
-import rdpy.core.log as log
+from rdpy.core import log
 
 # Pixel formats that carry full-range (0-255) luma/chroma (YUVJ* family).
 _FULL_RANGE_FORMATS = frozenset({'yuvj420p', 'yuvj422p', 'yuvj444p', 'yuvj440p'})
@@ -437,11 +436,11 @@ def _get_yuv_bufs(int h, int w):
     if key not in _yuv_buf_pool:
         N = h * w
         _yuv_buf_pool[key] = {
-            'yuv': np.empty((3, N), dtype=np.float32),
-            'rgb': np.empty((3, N), dtype=np.float32),
-            'bgra': np.zeros((h, w, 4), dtype=np.uint8),
-            'U444': np.empty((h, w), dtype=np.uint8),
-            'V444': np.empty((h, w), dtype=np.uint8),
+            'yuv': empty((3, N), dtype=float32),
+            'rgb': empty((3, N), dtype=float32),
+            'bgra': zeros((h, w, 4), dtype=uint8),
+            'U444': empty((h, w), dtype=uint8),
+            'V444': empty((h, w), dtype=uint8),
         }
     return _yuv_buf_pool[key]
 
@@ -451,7 +450,7 @@ def _plane_to_array(plane):
     Uses the buffer protocol directly (np.frombuffer(plane, ...)) to avoid
     the extra allocation that bytes(plane) would cause.
     """
-    return (np.frombuffer(plane, dtype=np.uint8)
+    return (frombuffer(plane, dtype=uint8)
     .reshape(plane.height, plane.line_size)[:, :plane.width])
 
 # ---------------------------------------------------------------------------
@@ -501,9 +500,9 @@ def _frame_nv12_to_bgra(frame):
     cdef int w = frame.width
     y_p = frame.planes[0]
     uv_p = frame.planes[1]
-    y = (np.frombuffer(y_p, dtype=np.uint8)
+    y = (frombuffer(y_p, dtype=uint8)
     .reshape(y_p.height, y_p.line_size)[:h, :w])
-    uv = (np.frombuffer(uv_p, dtype=np.uint8)
+    uv = (frombuffer(uv_p, dtype=uint8)
     .reshape(uv_p.height, uv_p.line_size)[:(h + 1) // 2, :w])
     bgra = _get_yuv_bufs(h, w)['bgra']
     _cy_nv12_lr_to_bgra(y, uv, bgra, w, h)
@@ -520,9 +519,9 @@ def _frame_to_bgra_regions(frame, fmt, regions, int h, int w):
     falls back to full-frame conversion).
     """
     bgra = _get_yuv_bufs(h, w)['bgra']
-    rects_flat = np.array(
+    rects_flat = array(
         [v for r in regions for v in (r[0], r[1], r[2], r[3])],
-        dtype=np.uint16)
+        dtype=uint16)
     cdef int n_rects = len(regions)
 
     cdef const uint8_t[:, :] Yv
@@ -547,9 +546,9 @@ def _frame_to_bgra_regions(frame, fmt, regions, int h, int w):
     if fmt == 'nv12':
         y_p = frame.planes[0]
         uv_p = frame.planes[1]
-        y = (np.frombuffer(y_p, dtype=np.uint8)
+        y = (frombuffer(y_p, dtype=uint8)
         .reshape(y_p.height, y_p.line_size)[:h, :w])
-        uv = (np.frombuffer(uv_p, dtype=np.uint8)
+        uv = (frombuffer(uv_p, dtype=uint8)
         .reshape(uv_p.height, uv_p.line_size)[:(h + 1) // 2, :w])
         _cy_nv12_lr_to_bgra_regions(y, uv, bgra, w, h, rects_flat, n_rects)
         return bgra
@@ -563,9 +562,9 @@ def _yuv420p_regions_numpy(Y, U_half, V_half, bgra, regions, full_range):
     _frame_to_bgra_regions — it is provided for API compatibility with
     code that calls it directly.
     """
-    rects_flat = np.array(
+    rects_flat = array(
         [v for r in regions for v in (r[0], r[1], r[2], r[3])],
-        dtype=np.uint16)
+        dtype=uint16)
     cdef int n_rects = len(regions)
     cdef int h = Y.shape[0]
     cdef int w = Y.shape[1]
@@ -654,12 +653,12 @@ def _combine_avc444v2_bgra(y_plane, u_half, v_half, aux_frame, full_range, int w
 # ---------------------------------------------------------------------------
 
 try:
-    import av
+    from av import codec as av_codec, error, Packet
 
     _HAS_AV = True
-except ImportError:
+except:
     _HAS_AV = False
-    log.warning("PyAV (av) not installed; H.264/AVC codec support disabled")
+    log.warning(u'PyAV (av) not installed; H.264/AVC codec support disabled')
 
 # H.264 Annex B start code for NAL unit framing
 _ANNEX_B_START = b'\x00\x00\x00\x01'
@@ -673,22 +672,22 @@ def _try_open_hw_decoder():
     immediate output — matching grdp's behaviour.
     """
     hw_configs = []
-    if sys.platform == 'darwin':
+    if platform == 'darwin':
         hw_configs.append('videotoolbox')
-    elif sys.platform.startswith('linux'):
+    elif platform.startswith('linux'):
         hw_configs.append('vaapi')
 
-    codec = av.codec.Codec('h264', 'r')
+    codec = av_codec.Codec('h264', 'r')
     for hw_name in hw_configs:
         try:
             from av.codec.hwaccel import HWAccel
             accel = HWAccel(hw_name)
-            ctx = av.codec.CodecContext.create(codec, hwaccel=accel)
+            ctx = av_codec.CodecContext.create(codec, hwaccel=accel)
             ctx.open()
-            log.debug("AVC: opened hardware decoder: %s" % hw_name)
+            log.debug(u'AVC: opened hardware decoder: %s' % hw_name)
             return ctx, hw_name
         except Exception as e:
-            log.debug("AVC: hardware decoder '%s' unavailable: %s" % (hw_name, e))
+            log.debug(u'AVC: hardware decoder \'%s\' unavailable: %s' % (hw_name, e))
 
     return None, None
 
@@ -708,13 +707,13 @@ def _open_sw_decoder():
     all) but it returns AVERROR_UNKNOWN on certain High-profile streams
     that RDP servers commonly send, making it unsuitable.
     """
-    codec = av.codec.Codec('h264', 'r')
-    ctx = av.codec.CodecContext.create(codec)
-    ctx.thread_count = min(os.cpu_count() or 1, 4)
+    codec = av_codec.Codec('h264', 'r')
+    ctx = av_codec.CodecContext.create(codec)
+    ctx.thread_count = min(cpu_count() or 1, 4)
     ctx.thread_type = 2  # SLICE — no reorder delay, parallelises within frame
     ctx.options = {'flags': '+low_delay', 'flags2': '+fast', 'refs': '1'}
     ctx.open()
-    log.debug("AVC: using software H.264 decoder (thread_count=%d, SLICE, low_delay, refs=1)" %
+    log.debug(u'AVC: using software H.264 decoder (thread_count=%d, SLICE, low_delay, refs=1)' %
               ctx.thread_count)
     return ctx
 
@@ -728,7 +727,7 @@ class AvcDecoder:
 
     def __init__(self):
         if not _HAS_AV:
-            raise RuntimeError("PyAV (av) is required for H.264/AVC support")
+            raise RuntimeError(u'PyAV (av) is required for H.264/AVC support')
 
         self._ctx = None
         self._hw_name = None
@@ -879,11 +878,11 @@ class AvcDecoder:
                 if nal_type == 7:
                     if nal_bytes != self._sps_nal:
                         self._sps_nal = nal_bytes
-                        log.debug("AVC: cached SPS NAL (%d bytes)" % len(nal_bytes))
+                        log.debug(u'AVC: cached SPS NAL (%d bytes)' % len(nal_bytes))
                 else:
                     if nal_bytes != self._pps_nal:
                         self._pps_nal = nal_bytes
-                        log.debug("AVC: cached PPS NAL (%d bytes)" % len(nal_bytes))
+                        log.debug(u'AVC: cached PPS NAL (%d bytes)' % len(nal_bytes))
                 search_from = nal_end
             else:
                 search_from = nal_start + 1
@@ -908,7 +907,7 @@ class AvcDecoder:
         to avoid an infinite reset loop if hardware acceleration is broken.
         """
         self._hw_reset_count += 1
-        log.debug("AVC: hard reset #%d (%s, recreating decoder)"
+        log.debug(u'AVC: hard reset #%d (%s, recreating decoder)'
                   % (self._hw_reset_count, reason))
         self._ctx = None
         self._hw_error_count = 0
@@ -928,7 +927,7 @@ class AvcDecoder:
 
         if self._sps_nal and self._pps_nal:
             self._prepend_sps_next_idr = True
-            log.debug("AVC: will inject cached SPS+PPS (%d+%d bytes) before next IDR"
+            log.debug(u'AVC: will inject cached SPS+PPS (%d+%d bytes) before next IDR'
                       % (len(self._sps_nal), len(self._pps_nal)))
 
         if self.on_hard_reset is not None:
@@ -977,19 +976,19 @@ class AvcDecoder:
         if len(data) < 4:
             return [], None
 
-        numRegionRects = struct.unpack_from('<I', data, 0)[0]
+        numRegionRects = unpack_from('<I', data, 0)[0]
         off = 4
 
         rects_size = numRegionRects * 8
         if len(data) < off + rects_size:
-            log.warning("AVC420: insufficient data for %d region rects" % numRegionRects)
+            log.warning(u'AVC420: insufficient data for %d region rects' % numRegionRects)
             return [], None
 
-        raw = struct.unpack_from('<%dH' % (numRegionRects * 4), data, off)
+        raw = unpack_from('<%dH' % (numRegionRects * 4), data, off)
         qvals_off = off + rects_size
         qvals_size = numRegionRects * 2
         if len(data) < qvals_off + qvals_size:
-            log.warning("AVC420: insufficient data for quant quality values")
+            log.warning(u'AVC420: insufficient data for quant quality values')
             return [], None
         regions = [(raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2], raw[i * 4 + 3],
                     data[qvals_off + i * 2], data[qvals_off + i * 2 + 1])
@@ -997,7 +996,7 @@ class AvcDecoder:
         off = qvals_off + qvals_size
 
         h264_data = data[off:]
-        log.debug("AVC420: %d regions, %d bytes H.264 data" %
+        log.debug(u'AVC420: %d regions, %d bytes H.264 data' %
                   (numRegionRects, len(h264_data)))
         return regions, bytes(h264_data)
 
@@ -1020,12 +1019,12 @@ class AvcDecoder:
         if len(data) < 4:
             return None
 
-        cbField = struct.unpack_from('<I', data, 0)[0]
+        cbField = unpack_from('<I', data, 0)[0]
         lc = (cbField >> 30) & 0x03
         cbAvc420Stream1 = cbField & 0x3FFFFFFF
         rest = data[4:]
 
-        log.debug("AVC444: LC=%d cbStream1=%d restLen=%d" %
+        log.debug(u'AVC444: LC=%d cbStream1=%d restLen=%d' %
                   (lc, cbAvc420Stream1, len(rest)))
 
         if lc == 2:
@@ -1033,7 +1032,7 @@ class AvcDecoder:
 
         if lc == 0:
             if cbAvc420Stream1 > len(rest):
-                log.warning("AVC444: stream1 size %d exceeds data %d" %
+                log.warning(u'AVC444: stream1 size %d exceeds data %d' %
                             (cbAvc420Stream1, len(rest)))
                 return None
             stream1_data = rest[:cbAvc420Stream1]
@@ -1042,7 +1041,7 @@ class AvcDecoder:
             if cbAvc420Stream1 > 0 and cbAvc420Stream1 <= len(rest):
                 stream1_data = rest[:cbAvc420Stream1]
         else:
-            log.warning("AVC444: unexpected LC value %d" % lc)
+            log.warning(u'AVC444: unexpected LC value %d' % lc)
             return None
 
         _regions, h264_data = self._parse_avc420_stream(stream1_data)
@@ -1095,7 +1094,7 @@ class AvcDecoder:
         self._avc444_v = _plane_to_array(frame.planes[2]).copy()
         self._avc444_w = frame.width
         self._avc444_h = frame.height
-        self._avc444_y_updated_at = time.monotonic()
+        self._avc444_y_updated_at = monotonic()
 
     def _prime_aux_decoder(self, h264_data):
         """Feed stream2 data to the auxiliary decoder to advance past its IDR."""
@@ -1103,7 +1102,7 @@ class AvcDecoder:
         try:
             dec2._decode_h264(h264_data)
         except Exception as e:
-            log.debug("AVC444: aux decoder prime error: %s" % e)
+            log.debug(u'AVC444: aux decoder prime error: %s' % e)
             if dec2._hw_error_count >= dec2._HW_ERROR_THRESHOLD:
                 dec2.close()
                 self._dec2 = None
@@ -1113,7 +1112,7 @@ class AvcDecoder:
         if self._dec2 is None:
             self._dec2 = AvcDecoder()
             self._dec2.on_hard_reset = lambda: self.on_hard_reset() if self.on_hard_reset else None
-            log.debug("AVC444: auxiliary decoder initialized")
+            log.debug(u'AVC444: auxiliary decoder initialized')
         return self._dec2
 
     # Maximum age of the Y-plane cache before an LC=2 combine is suppressed.
@@ -1130,32 +1129,32 @@ class AvcDecoder:
         is stale (main decoder likely stalling).
         """
         if self._dec2 is None:
-            log.debug("AVC444: LC=2 skipped (aux decoder not yet initialized)")
+            log.debug(u'AVC444: LC=2 skipped (aux decoder not yet initialized)')
             return b""
         if self._avc444_y is None:
-            log.debug("AVC444: LC=2 skipped (no cached luma)")
+            log.debug(u'AVC444: LC=2 skipped (no cached luma)')
             return b""
         # Staleness guard: mirrors grdp decodeAVC444LC2 avc444YStaleness check.
         if self._avc444_y_updated_at > 0.0:
-            age = time.monotonic() - self._avc444_y_updated_at
+            age = monotonic() - self._avc444_y_updated_at
             if age > self._AVC444_Y_STALENESS:
-                log.debug("AVC444: LC=2 skipped (Y cache stale %.0fms, main decoder likely stalling)"
+                log.debug(u'AVC444: LC=2 skipped (Y cache stale %.0fms, main decoder likely stalling)'
                           % (age * 1000))
                 return b""
 
         _regions, h264_data = self._parse_avc420_stream(data)
         if h264_data is None or len(h264_data) == 0:
-            log.debug("AVC444: LC=2 skipped (empty stream2 H.264 data)")
+            log.debug(u'AVC444: LC=2 skipped (empty stream2 H.264 data)')
             return b""
 
         try:
             aux_frame = self._dec2._decode_h264(h264_data)
         except Exception as e:
-            log.debug("AVC444: LC=2 aux decode error: %s" % e)
+            log.debug(u'AVC444: LC=2 aux decode error: %s' % e)
             return b""
 
         if aux_frame is None:
-            log.debug("AVC444: LC=2 aux decode buffering")
+            log.debug(u'AVC444: LC=2 aux decode buffering')
             return b""
 
         fmt = aux_frame.format.name
@@ -1167,7 +1166,7 @@ class AvcDecoder:
             self._avc444_y, self._avc444_u, self._avc444_v,
             aux_frame, self._avc444_full_range, w, h)
 
-        log.debug("AVC444: LC=2 decoded and combined (%dx%d dest=%dx%d)" %
+        log.debug(u'AVC444: LC=2 decoded and combined (%dx%d dest=%dx%d)' %
                   (w, h, dest_width, dest_height))
 
         src_h, src_w = bgra.shape[:2]
@@ -1176,7 +1175,7 @@ class AvcDecoder:
 
         copy_w = min(src_w, dest_width)
         copy_h = min(src_h, dest_height)
-        out = np.zeros((dest_height, dest_width, 4), dtype=np.uint8)
+        out = zeros((dest_height, dest_width, 4), dtype=uint8)
         out[:copy_h, :copy_w] = bgra[:copy_h, :copy_w]
         return out
 
@@ -1215,25 +1214,25 @@ class AvcDecoder:
             return None
 
         self._decode_count += 1
-        self._last_receive_time = time.monotonic()
+        self._last_receive_time = monotonic()
 
         nal_types = self._parse_and_cache_nals(h264_data)
         has_idr = 5 in nal_types
 
         if self._decode_count <= 5 or has_idr or self._null_count > 0:
             names = [self._NAL_NAMES.get(t, str(t)) for t in nal_types]
-            log.debug("AVC: decode #%d NAL types: %s (h264Len=%d)" %
+            log.debug(u'AVC: decode #%d NAL types: %s (h264Len=%d)' %
                       (self._decode_count, ','.join(names), len(h264_data)))
 
         if self._needs_keyframe and not has_idr:
             self._keyframe_wait_count += 1
             if self._keyframe_wait_count == 1:
-                self._keyframe_wait_start = time.monotonic()
+                self._keyframe_wait_start = monotonic()
             if self._keyframe_wait_count == 1 or self._keyframe_wait_count % 30 == 0:
-                log.debug("AVC: decode #%d waiting for IDR (skipped %d non-IDR frames)" %
+                log.debug(u'AVC: decode #%d waiting for IDR (skipped %d non-IDR frames)' %
                           (self._decode_count, self._keyframe_wait_count))
             waited_too_long = (self._keyframe_wait_start > 0 and
-                               time.monotonic() - self._keyframe_wait_start >= (
+                               monotonic() - self._keyframe_wait_start >= (
                                    self._KEYFRAME_WAIT_TIMEOUT if self.is_hardware
                                    else self._KEYFRAME_WAIT_TIMEOUT_SW))
             if self._keyframe_wait_count >= self._KEYFRAME_WAIT_LIMIT or waited_too_long:
@@ -1248,26 +1247,26 @@ class AvcDecoder:
         decode_data = h264_data
         if has_idr and self._prepend_sps_next_idr and self._sps_nal and self._pps_nal:
             decode_data = self._sps_nal + self._pps_nal + bytes(h264_data)
-            log.debug("AVC: decode #%d injecting cached SPS+PPS (%d+%d bytes) before IDR"
+            log.debug(u'AVC: decode #%d injecting cached SPS+PPS (%d+%d bytes) before IDR'
                       % (self._decode_count, len(self._sps_nal), len(self._pps_nal)))
 
         packet = None
         try:
-            packet = av.Packet(decode_data)
+            packet = Packet(decode_data)
             result = self._receive_frame(packet)
 
             if result is None and has_idr:
-                log.debug("AVC: decode #%d null on IDR, flushing and retrying" %
+                log.debug(u'AVC: decode #%d null on IDR, flushing and retrying' %
                           self._decode_count)
                 self._ctx.flush_buffers()
                 result = self._receive_frame(packet)
                 if result is not None:
-                    log.debug("AVC: decode #%d retry OK %dx%d" %
+                    log.debug(u'AVC: decode #%d retry OK %dx%d' %
                               (self._decode_count, result.width, result.height))
 
             if result is None:
                 self._null_count += 1
-                log.debug("AVC: decode #%d returned no frame (null_count=%d, h264Len=%d)" %
+                log.debug(u'AVC: decode #%d returned no frame (null_count=%d, h264Len=%d)' %
                           (self._decode_count, self._null_count, len(h264_data)))
             else:
                 self._null_count = 0
@@ -1277,12 +1276,12 @@ class AvcDecoder:
                 self._keyframe_wait_start = 0.0
                 self._prepend_sps_next_idr = False
                 if self._decode_count <= 3:
-                    log.debug("AVC: decode #%d OK frame=%dx%d fmt=%s h264Len=%d" %
+                    log.debug(u'AVC: decode #%d OK frame=%dx%d fmt=%s h264Len=%d' %
                               (self._decode_count, result.width, result.height,
                                result.format.name, len(h264_data)))
             return result
-        except av.error.InvalidDataError as e:
-            log.debug("AVC: H.264 decode error (invalid data): %s" % e)
+        except error.InvalidDataError as e:
+            log.debug(u'AVC: H.264 decode error (invalid data): %s' % e)
             if has_idr and packet is not None:
                 return self._flush_and_retry_idr(packet)
             self._ctx.flush_buffers()
@@ -1290,7 +1289,7 @@ class AvcDecoder:
             self._keyframe_wait_count = 0
             self._keyframe_wait_start = 0.0
         except Exception as e:
-            log.warning("AVC: H.264 decode error: %s" % e)
+            log.warning(u'AVC: H.264 decode error: %s' % e)
             if has_idr and packet is not None:
                 return self._flush_and_retry_idr(packet)
             self._ctx.flush_buffers()
@@ -1321,7 +1320,7 @@ class AvcDecoder:
     def _flush_and_retry_idr(self, packet):
         """Flush decoder buffers and retry an IDR packet after an error."""
         try:
-            log.debug("AVC: decode #%d flushing corrupted decoder and retrying IDR" %
+            log.debug(u'AVC: decode #%d flushing corrupted decoder and retrying IDR' %
                       self._decode_count)
             self._ctx.flush_buffers()
             result = self._receive_frame(packet)
@@ -1332,11 +1331,11 @@ class AvcDecoder:
                 self._keyframe_wait_count = 0
                 self._keyframe_wait_start = 0.0
                 self._prepend_sps_next_idr = False
-                log.debug("AVC: decode #%d IDR recovery after flush OK %dx%d" %
+                log.debug(u'AVC: decode #%d IDR recovery after flush OK %dx%d' %
                           (self._decode_count, result.width, result.height))
             return result
         except Exception as e:
-            log.debug("AVC: decode #%d IDR retry also failed: %s" %
+            log.debug(u'AVC: decode #%d IDR retry also failed: %s' %
                       (self._decode_count, e))
             self._hw_error_count += 1
             if self._hw_error_count >= self._HW_ERROR_THRESHOLD:
@@ -1378,7 +1377,7 @@ class AvcDecoder:
             fmt = 'nv12'
 
         if self._decode_count <= 3:
-            log.debug("AVC: frame_to_bgra #%d src=%dx%d dest=%dx%d fmt=%s" %
+            log.debug(u'AVC: frame_to_bgra #%d src=%dx%d dest=%dx%d fmt=%s' %
                       (self._decode_count, frame.width, frame.height,
                        dest_width, dest_height, fmt))
 
@@ -1407,7 +1406,7 @@ class AvcDecoder:
 
         copy_w = min(src_w, dest_width)
         copy_h = min(src_h, dest_height)
-        out = np.zeros((dest_height, dest_width, 4), dtype=np.uint8)
+        out = zeros((dest_height, dest_width, 4), dtype=uint8)
         out[:copy_h, :copy_w] = bgra[:copy_h, :copy_w]
         if self._decode_count <= 1:
             self._save_debug_frame(out, dest_width, dest_height)
@@ -1424,9 +1423,9 @@ class AvcDecoder:
             img = Image.fromarray(rgba[:height, :width], 'RGBA')
             path = '/tmp/rdpyqt_frame_%d.png' % self._decode_count
             img.save(path)
-            log.debug("AVC: saved diagnostic frame to %s" % path)
+            log.debug(u'AVC: saved diagnostic frame to %s' % path)
         except Exception as e:
-            log.debug("AVC: could not save diagnostic frame: %s" % e)
+            log.debug(u'AVC: could not save diagnostic frame: %s' % e)
 
 
 def is_available():

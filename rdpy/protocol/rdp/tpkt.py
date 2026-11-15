@@ -26,7 +26,7 @@ from __future__ import absolute_import, division, print_function
 from rdpy.core.type import UInt8, UInt16Be, sizeof
 from rdpy.core.error import CallPureVirtualFuntion
 from rdpy.core.layer import RawLayer
-import rdpy.core.log as log
+from rdpy.core import log
 
 
 class Action(object):
@@ -60,7 +60,7 @@ class IFastPathListener(object):
         @param fastPathS: {Stream}
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "recvFastPath", "IFastPathListener"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'recvFastPath', u'IFastPathListener'))
 
     def initFastPath(self, fastPathSender):
         """
@@ -75,7 +75,7 @@ class IFastPathListener(object):
         @param fastPathSender : {IFastPathSender}
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "setFastPathSender", "IFastPathListener"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'setFastPathSender', u'IFastPathListener'))
 
 
 class IFastPathSender(object):
@@ -90,7 +90,7 @@ class IFastPathSender(object):
         @param fastPathS: {Type | Tuple} type transform to stream and send as fastpath
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "sendFastPath", "IFastPathSender"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'sendFastPath', u'IFastPathSender'))
 
     def initFastPath(self, fastPathListener):
         """
@@ -105,7 +105,7 @@ class IFastPathSender(object):
         @param fastPathListener: {IFastPathListener}
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "setFastPathListener", "IFastPathSender"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'setFastPathListener', u'IFastPathSender'))
 
 
 class TPKT(RawLayer, IFastPathSender):
@@ -231,7 +231,7 @@ class TPKT(RawLayer, IFastPathSender):
         @summary: start TLS protocol
         @param sslContext: {ssl.ClientContextFactory | ssl.DefaultOpenSSLContextFactory} context use for TLS protocol
         """
-        log.debug("TPKT.startTLS()")
+        log.debug(u'TPKT.startTLS()')
         self.transport.startTLS(sslContext)
 
     def startNLA(self, sslContext, callback):
@@ -239,5 +239,5 @@ class TPKT(RawLayer, IFastPathSender):
         @summary: use to start NLA (NTLM over SSL) protocol
                     must be called after startTLS function
         """
-        log.debug("TPKT.startNLA()")
+        log.debug(u'TPKT.startNLA()')
         self.transport.startNLA(sslContext, callback)

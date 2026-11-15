@@ -3,7 +3,7 @@
 ZGFX (RDP 8.0 Bulk Compression) decompressor — Cython accelerated.
 Same public API as zgfx.py; shadows it when compiled.
 """
-import rdpy.core.log as log
+from rdpy.core import log
 
 ZGFX_HISTORY_SIZE = 2500000
 PACKET_COMPRESSED = 0x20
@@ -177,7 +177,7 @@ cdef class ZgfxDecompressor:
             peek = (bits_current >> (n_bits_current - 9)) & 0x1FF
             entry = _HUFF_LOOKUP[peek]
             if not entry.valid:
-                log.warning("ZGFX: no token at input_pos=%d outLen=%d" %
+                log.warning(u'ZGFX: no token at input_pos=%d outLen=%d' %
                             (input_pos, len(out)))
                 break
 
@@ -239,7 +239,7 @@ cdef class ZgfxDecompressor:
 
                 if distance != 0:
                     if distance <= 0 or distance > hist_size:
-                        log.warning("ZGFX: invalid distance %d" % distance)
+                        log.warning(u'ZGFX: invalid distance %d' % distance)
                         break
                     # Decode match length
                     if bits_remaining < 1:

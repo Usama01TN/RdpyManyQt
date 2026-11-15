@@ -85,10 +85,10 @@ class ClientConnectionRequestPDU(CompositeType):
         self.len = UInt8(lambda: sizeof(self) - 1)
         self.code = UInt8(MessageType.X224_TPDU_CONNECTION_REQUEST, constant=True)
         self.padding = (UInt16Be(), UInt16Be(), UInt8())
-        self.cookie = String(until=b"\x0d\x0a",
+        self.cookie = String(until=b'\x0d\x0a',
                              conditional=lambda: (self.len._is_readed and self.len.value > 14) or len(
                                  self.cookie.value) > 0)
-        #read if there is enough data
+        # read if there is enough data.
         self.protocolNeg = Negotiation(optional=True)
 
 
@@ -139,8 +139,7 @@ class Negotiation(CompositeType):
 
 class X224Layer(LayerAutomata, IStreamSender):
     """
-    @summary:  x224 layer management
-                there is an connection automata
+    @summary:  x224 layer management there is a connection automata.
     """
 
     def __init__(self, presentation):
@@ -166,8 +165,7 @@ class X224Layer(LayerAutomata, IStreamSender):
 
     def send(self, message):
         """
-        @summary: Write message packet for TPDU layer
-                   Add TPDU header
+        @summary: Write message packet for TPDU layer Add TPDU header
         @param message: network.Type message
         """
         self._transport.send((X224DataHeader(), message))
@@ -191,7 +189,7 @@ class Client(X224Layer):
     def setRoutingToken(self, token):
         """
         @summary: Set routing token for server redirection reconnection
-        @param token: {bytes} routing token (e.g. b"Cookie: msts=...\r\n")
+        @param token: {bytes} routing token (e.g. b'Cookie: msts=...\r\n')
         """
         self._routingToken = token
 
@@ -199,7 +197,7 @@ class Client(X224Layer):
         """
         @summary: Connection request for client send a connection request packet
         """
-        log.debug("x224 Client.connect()")
+        log.debug(u'x224 Client.connect()')
         self.sendConnectionRequest()
 
     def sendConnectionRequest(self):
@@ -226,13 +224,11 @@ class Client(X224Layer):
         @see: response -> https://msdn.microsoft.com/en-us/library/cc240506.aspx
         @see: failure ->https://msdn.microsoft.com/en-us/library/cc240507.aspx
         """
-        log.debug("Client.recvConnectionConfirm()")
+        log.debug(u'Client.recvConnectionConfirm()')
         message = ServerConnectionConfirm()
         data.readType(message)
-
         if message.protocolNeg.failureCode._is_readed:
-            raise RDPSecurityNegoFail("negotiation failure code %x" % message.protocolNeg.failureCode.value)
-
+            raise RDPSecurityNegoFail(u'negotiation failure code %x' % message.protocolNeg.failureCode.value)
         #check presence of negotiation response
         if message.protocolNeg._is_readed:
             log.debug('Client.recvConnectionConfirm() hex(message.protocolNeg.flag.value)={!r}'.format(hex(message.protocolNeg.flag.value)))
@@ -243,35 +239,33 @@ class Client(X224Layer):
         # The server must not pick a protocol the client disabled (FreeRDP
         # nego_recv_response: a disabled protocol fails the connection)
         if self._securitySettings is not None and not self._securitySettings.allows(self._selectedProtocol):
-            raise RDPSecurityNegoFail("the server selected a disabled security protocol (0x%x): %s" %
+            raise RDPSecurityNegoFail(u'the server selected a disabled security protocol (0x%x): %s' %
                                       (self._selectedProtocol, self._securitySettings.describe()))
-
         #NLA protocol doesn't support in actual version of RDPY
         if self._selectedProtocol in [Protocols.PROTOCOL_HYBRID_EX]:
-            raise InvalidExpectedDataException("RDPY doesn't support PROTOCOL_HYBRID_EX security Layer")
-
-        #now i'm ready to receive data
+            raise InvalidExpectedDataException(u'RDPY doesn\'t support PROTOCOL_HYBRID_EX security Layer')
+        # now I'm ready to receive data
         self.setNextState(self.recvData)
 
         if self._selectedProtocol == Protocols.PROTOCOL_RDP:
-            log.warning("*" * 43)
-            log.warning("*" + " " * 10 + "RDP Security selected" + " " * 10 + "*")
-            log.warning("*" * 43)
+            log.warning(u'*' * 43)
+            log.warning(u'*' + u' ' * 10 + u'RDP Security selected' + u' ' * 10 + u'*')
+            log.warning(u'*' * 43)
             #connection is done send to presentation
             self._presentation.connect()
 
         elif self._selectedProtocol == Protocols.PROTOCOL_SSL:
-            log.debug("*" * 43)
-            log.debug("*" + " " * 10 + "SSL Security selected" + " " * 10 + "*")
-            log.debug("*" * 43)
+            log.debug(u'*' * 43)
+            log.debug(u'*' + u' ' * 10 + u'SSL Security selected' + u' ' * 10 + u'*')
+            log.debug(u'*' * 43)
             self._transport.startTLS(ClientTLSContext(self._certificateVerifier))
             #connection is done send to presentation
             self._presentation.connect()
 
         elif self._selectedProtocol == Protocols.PROTOCOL_HYBRID:
-            log.debug("*" * 43)
-            log.debug("*" + " " * 10 + "NLA Security selected" + " " * 10 + "*")
-            log.debug("*" * 43)
+            log.debug(u'*' * 43)
+            log.debug(u'*' + u' ' * 10 + u'NLA Security selected' + u' ' * 10 + u'*')
+            log.debug(u'*' * 43)
             self._transport.startNLA(ClientTLSContext(self._certificateVerifier),
                                      lambda: self._presentation.connect())
 
@@ -298,7 +292,7 @@ class Server(X224Layer):
         """
         @summary: Connection request for server wait connection request packet from client
         """
-        log.debug("Server.connect()")
+        log.debug(u'Server.connect()')
         self.setNextState(self.recvConnectionRequest)
 
     def recvConnectionRequest(self, data):
@@ -308,7 +302,7 @@ class Server(X224Layer):
         @param data: {Stream}
         @see : https://msdn.microsoft.com/en-us/library/cc240470.aspx
         """
-        log.debug("Server.recvConnectionRequest()")
+        log.debug(u'Server.recvConnectionRequest()')
         message = ClientConnectionRequestPDU()
         data.readType(message)
 
@@ -325,7 +319,7 @@ class Server(X224Layer):
 
         #if force ssl is enable
         if not self._selectedProtocol & Protocols.PROTOCOL_SSL and self._forceSSL:
-            log.warning("server reject client because doesn't support SSL")
+            log.warning(u'server reject client because doesn\'t support SSL')
             #send error message and quit
             message = ServerConnectionConfirm()
             message.protocolNeg.code.value = NegociationType.TYPE_RDP_NEG_FAILURE
@@ -343,13 +337,13 @@ class Server(X224Layer):
                     Next state is recvData
         @see : https://msdn.microsoft.com/en-us/library/cc240501.aspx
         """
-        log.debug("Server.sendConnectionConfirm()")
+        log.debug(u'Server.sendConnectionConfirm()')
         message = ServerConnectionConfirm()
         message.protocolNeg.code.value = NegociationType.TYPE_RDP_NEG_RSP
         message.protocolNeg.selectedProtocol.value = self._selectedProtocol
         self._transport.send(message)
         if self._selectedProtocol == Protocols.PROTOCOL_SSL:
-            log.debug("*" * 10 + " select SSL layer " + "*" * 10)
+            log.debug(u'*' * 10 + u' select SSL layer ' + u'*' * 10)
             #_transport is TPKT and transport is TCP layer of twisted
             self._transport.startTLS(ServerTLSContext(self._serverPrivateKeyFileName, self._serverCertificateFileName))
 

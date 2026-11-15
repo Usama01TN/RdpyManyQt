@@ -23,12 +23,12 @@ Implement the main graphic layer
 In this layer are managed all mains bitmap update orders end user inputs
 """
 from __future__ import absolute_import, division, print_function
-
+from struct import unpack_from
 from rdpy.core.error import CallPureVirtualFuntion
-from rdpy.core.layer import LayerAutomata
 from rdpy.core.type import ArrayType, Stream
-import rdpy.protocol.rdp.tpkt as tpkt
-import rdpy.core.log as log
+from rdpy.core.layer import LayerAutomata
+from rdpy.protocol.rdp import tpkt
+from rdpy.core import log
 from . import data, caps
 
 
@@ -41,14 +41,15 @@ class PDUClientListener(object):
         """
         @summary: Event call when PDU layer is ready to send events
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "onReady", "PDUClientListener"))
+        raise CallPureVirtualFuntion(
+            u'%s:%s defined by interface %s' % (self.__class__, u'onReady', u'PDUClientListener'))
 
     def onSessionReady(self):
         """
         @summary: Event call when Windows session is ready
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "onSessionReady", "PDUClientListener"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'onSessionReady', u'PDUClientListener'))
 
     def onUpdate(self, rectangles):
         """
@@ -56,7 +57,7 @@ class PDUClientListener(object):
         @param rectangles: [pdu.BitmapData] struct
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "onUpdate", "PDUClientListener"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'onUpdate', u'PDUClientListener'))
 
     def onPointerHide(self):
         """
@@ -101,7 +102,7 @@ class PDUServerListener(object):
         """
         @summary: Event call when PDU layer is ready to send update
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "onReady", "PDUServerListener"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'onReady', u'PDUServerListener'))
 
     def onSlowPathInput(self, slowPathInputEvents):
         """
@@ -109,7 +110,7 @@ class PDUServerListener(object):
         @param slowPathInputEvents: [data.SlowPathInputEvent]
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "onSlowPathInput", "PDUServerListener"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'onSlowPathInput', u'PDUServerListener'))
 
 
 class PDULayer(LayerAutomata, tpkt.IFastPathListener):
@@ -174,7 +175,7 @@ class PDULayer(LayerAutomata, tpkt.IFastPathListener):
         @summary: Send a PDU data to transport layer
         @param pduMessage: PDU message
         """
-        log.debug("PDULayer.sendPDU()")
+        log.debug(u'PDULayer.sendPDU()')
         self._transport.send(data.PDU(self._transport.getUserId(), pduMessage))
 
     def sendDataPDU(self, pduData):
@@ -182,7 +183,7 @@ class PDULayer(LayerAutomata, tpkt.IFastPathListener):
         @summary: Send an PDUData to transport layer
         @param pduData: PDU data message
         """
-        log.debug("PDULayer.sendDataPDU()")
+        log.debug(u'PDULayer.sendDataPDU()')
         self.sendPDU(data.DataPDU(pduData, self._shareId))
 
 
@@ -193,27 +194,27 @@ def uncompressedToBgra(data, width, height, bpp):
     (FreeRDP gdi_get_pixel_format + FREERDP_FLIP_VERTICAL)
     @return: {bytes | None}
     """
-    import numpy as _np
+    from numpy import empty, frombuffer, uint16, uint8
     size = (bpp + 7) // 8
     need = width * height * size
     if size not in (2, 3, 4) or len(data) < need:
         return None
-    src = _np.frombuffer(data, dtype=_np.uint8, count=need).reshape(height, width, size)[::-1]
-    out = _np.empty((height, width, 4), dtype=_np.uint8)
+    src = frombuffer(data, dtype=uint8, count=need).reshape(height, width, size)[::-1]
+    out = empty((height, width, 4), dtype=uint8)
     if size == 4:
         out[...] = src
     elif size == 3:
         out[..., :3] = src
     else:
-        v = src[..., 0].astype(_np.uint16) | (src[..., 1].astype(_np.uint16) << 8)
+        v = src[..., 0].astype(uint16) | (src[..., 1].astype(uint16) << 8)
         if bpp == 16:
             r, g, b = (v >> 11) & 0x1F, (v >> 5) & 0x3F, v & 0x1F
-            out[..., 1] = ((g << 2) | (g >> 4)).astype(_np.uint8)
+            out[..., 1] = ((g << 2) | (g >> 4)).astype(uint8)
         else:
             r, g, b = (v >> 10) & 0x1F, (v >> 5) & 0x1F, v & 0x1F
-            out[..., 1] = ((g << 3) | (g >> 2)).astype(_np.uint8)
-        out[..., 2] = ((r << 3) | (r >> 2)).astype(_np.uint8)
-        out[..., 0] = ((b << 3) | (b >> 2)).astype(_np.uint8)
+            out[..., 1] = ((g << 3) | (g >> 2)).astype(uint8)
+        out[..., 2] = ((r << 3) | (r >> 2)).astype(uint8)
+        out[..., 0] = ((b << 3) | (b >> 2)).astype(uint8)
     out[..., 3] = 0xFF
     return out.tobytes()
 
@@ -231,6 +232,11 @@ class Client(PDULayer):
         self._listener = listener
         self._fastPathFragBuf = bytearray()
         self._fastPathFragType = None
+        # RemoteApp: window orders of the orders updates (rail.WindowOrderParser)
+        self._ordersHandler = None
+        self._railEnabled = False
+        # desktop size of the last Demand Active PDU
+        self._serverDesktopSize = None
 
     def connect(self):
         """
@@ -259,23 +265,23 @@ class Client(PDULayer):
         Wait Server Synchronize PDU
         @param s: Stream
         """
-        log.debug("PDULayer.recvDemandActivePDU()")
+        log.debug(u'PDULayer.recvDemandActivePDU()')
         pdu = data.PDU()
         s.readType(pdu)
 
         if pdu.shareControlHeader.pduType.value == data.PDUType.PDUTYPE_SERVER_REDIR_PKT:
-            log.debug("Received server redirection PDU during connection sequence")
+            log.debug(u'Received server redirection PDU during connection sequence')
             self._handleServerRedirection(pdu.pduMessage)
             return
 
         if pdu.shareControlHeader.pduType.value == data.PDUType.PDUTYPE_DEACTIVATEALLPDU:
-            log.debug("Received DeactivateAll PDU, waiting for new DemandActive")
+            log.debug(u'Received DeactivateAll PDU, waiting for new DemandActive')
             return
 
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DEMANDACTIVEPDU:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvDemandActivePDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvDemandActivePDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
 
@@ -283,6 +289,25 @@ class Client(PDULayer):
 
         for cap in pdu.pduMessage.capabilitySets._array:
             self._serverCapabilities[cap.capabilitySetType] = cap
+
+        # The server decides the desktop size (FreeRDP rdp_read_bitmap_capability_set):
+        # confirm it, e.g. after a display control resize without the graphics pipeline
+        # (deactivation-reactivation sequence with the new size). Read from the PDU: the
+        # dictionary above is keyed by the type objects, not their values.
+        for cap in pdu.pduMessage.capabilitySets._array:
+            if cap.capabilitySetType.value != caps.CapsType.CAPSTYPE_BITMAP:
+                continue
+            try:
+                width, height = cap.capability.desktopWidth.value, cap.capability.desktopHeight.value
+            except AttributeError:
+                break
+            if width and height:
+                self._serverDesktopSize = (width, height)
+                if (width, height) != (self._gccCore.desktopWidth.value, self._gccCore.desktopHeight.value):
+                    log.info(u'the server set the desktop size to %dx%d' % (width, height))
+                    self._gccCore.desktopWidth.value = width
+                    self._gccCore.desktopHeight.value = height
+            break
 
         #secure checksum cap here maybe protocol (another) design error
         self._transport._enableSecureCheckSum = bool(self._serverCapabilities[
@@ -299,17 +324,17 @@ class Client(PDULayer):
         Wait Control Cooperate PDU
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvServerSynchronizePDU()")
+        log.debug(u'PDULayer.recvServerSynchronizePDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value == data.PDUType.PDUTYPE_DEACTIVATEALLPDU:
-            log.debug("Received DeactivateAll during sync, restarting capability exchange")
+            log.debug(u'Received DeactivateAll during sync, restarting capability exchange')
             self.setNextState(self.recvDemandActivePDU)
             return
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DATAPDU or pdu.pduMessage.shareDataHeader.pduType2.value != data.PDUType2.PDUTYPE2_SYNCHRONIZE:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvServerSynchronizePDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvServerSynchronizePDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
 
@@ -321,17 +346,17 @@ class Client(PDULayer):
         Wait Control Granted PDU
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvServerControlCooperatePDU()")
+        log.debug(u'PDULayer.recvServerControlCooperatePDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value == data.PDUType.PDUTYPE_DEACTIVATEALLPDU:
-            log.debug("Received DeactivateAll during control cooperate, restarting capability exchange")
+            log.debug(u'Received DeactivateAll during control cooperate, restarting capability exchange')
             self.setNextState(self.recvDemandActivePDU)
             return
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DATAPDU or pdu.pduMessage.shareDataHeader.pduType2.value != data.PDUType2.PDUTYPE2_CONTROL or pdu.pduMessage.pduData.action.value != data.Action.CTRLACTION_COOPERATE:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvServerControlCooperatePDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvServerControlCooperatePDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
 
@@ -343,17 +368,17 @@ class Client(PDULayer):
         Wait Font map PDU
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvServerControlGrantedPDU()")
+        log.debug(u'PDULayer.recvServerControlGrantedPDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value == data.PDUType.PDUTYPE_DEACTIVATEALLPDU:
-            log.debug("Received DeactivateAll during control granted, restarting capability exchange")
+            log.debug(u'Received DeactivateAll during control granted, restarting capability exchange')
             self.setNextState(self.recvDemandActivePDU)
             return
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DATAPDU or pdu.pduMessage.shareDataHeader.pduType2.value != data.PDUType2.PDUTYPE2_CONTROL or pdu.pduMessage.pduData.action.value != data.Action.CTRLACTION_GRANTED_CONTROL:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvServerControlGrantedPDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvServerControlGrantedPDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
 
@@ -365,17 +390,17 @@ class Client(PDULayer):
         Wait any PDU
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvServerFontMapPDU()")
+        log.debug(u'PDULayer.recvServerFontMapPDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value == data.PDUType.PDUTYPE_DEACTIVATEALLPDU:
-            log.debug("Received DeactivateAll during font map, restarting capability exchange")
+            log.debug(u'Received DeactivateAll during font map, restarting capability exchange')
             self.setNextState(self.recvDemandActivePDU)
             return
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DATAPDU or pdu.pduMessage.shareDataHeader.pduType2.value != data.PDUType2.PDUTYPE2_FONTMAP:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvServerFontMapPDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvServerFontMapPDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
 
@@ -403,7 +428,7 @@ class Client(PDULayer):
                 #https://msdn.microsoft.com/en-us/library/cc240454.aspx
                 self.setNextState(self.recvDemandActivePDU)
             elif pdu.shareControlHeader.pduType.value == data.PDUType.PDUTYPE_SERVER_REDIR_PKT:
-                log.debug("Received server redirection PDU")
+                log.debug(u'Received server redirection PDU')
                 self._handleServerRedirection(pdu.pduMessage)
 
     def recvFastPath(self, secFlag, fastPathS):
@@ -414,7 +439,7 @@ class Client(PDULayer):
         @param fastPathS: {Stream} that contain fast path data
         @param secFlag: {SecFlags}
         """
-        import struct
+        from struct import unpack_from
         rawData = fastPathS.getvalue()[fastPathS.pos:]
         offset = 0
 
@@ -437,7 +462,7 @@ class Client(PDULayer):
 
             if offset + 2 > len(rawData):
                 break
-            size = struct.unpack_from('<H', rawData, offset)[0]
+            size = unpack_from('<H', rawData, offset)[0]
             offset += 2
 
             if offset + size > len(rawData):
@@ -470,11 +495,15 @@ class Client(PDULayer):
 
     def _dispatchFastPathUpdate(self, updateCode, payload):
         """Dispatch a complete (reassembled) FastPath update."""
-        if updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_ORDERS:
+        if updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_ORDERS and \
+                self._ordersHandler is not None and len(payload) >= 2:
+            # TS_FP_UPDATE_ORDERS: numberOrders (2 bytes) + orders (RemoteApp window orders)
+            self._ordersHandler.parseOrders(payload, 2, unpack_from('<H', payload, 0)[0])
+        elif updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_ORDERS:
             if not getattr(self, '_ordersWarned', False):
                 self._ordersWarned = True
-                log.warning("the server sent drawing orders although none was announced: "
-                            "they are not drawn")
+                log.warning(u'the server sent drawing orders although none was announced: '
+                            u'they are not drawn')
         if updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_BITMAP:
             try:
                 pduData = data.FastPathBitmapUpdateDataPDU()
@@ -482,7 +511,7 @@ class Client(PDULayer):
                 s.readType(pduData)
                 self._listener.onUpdate(pduData.rectangles._array)
             except Exception as e:
-                log.warning("Failed to parse bitmap update: %s" % e)
+                log.warning(u'Failed to parse bitmap update: %s' % e)
         elif updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_PTR_NULL:
             self._listener.onPointerHide()
         elif updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_PTR_DEFAULT:
@@ -499,7 +528,7 @@ class Client(PDULayer):
                     ud.andMaskData.value, ud.xorMaskData.value
                 )
             except Exception as e:
-                log.warning("Failed to parse color pointer update: %s" % e)
+                log.warning(u'Failed to parse color pointer update: %s' % e)
         elif updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_CACHED:
             try:
                 ud = data.FastPathCachedPointerPDU()
@@ -507,7 +536,7 @@ class Client(PDULayer):
                 s.readType(ud)
                 self._listener.onPointerCached(ud.cacheIndex.value)
             except Exception as e:
-                log.warning("Failed to parse cached pointer update: %s" % e)
+                log.warning(u'Failed to parse cached pointer update: %s' % e)
         elif updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_POINTER:
             try:
                 ud = data.FastPathPointerUpdatePDU()
@@ -520,28 +549,28 @@ class Client(PDULayer):
                     ud.andMaskData.value, ud.xorMaskData.value
                 )
             except Exception as e:
-                log.warning("Failed to parse pointer update: %s" % e)
+                log.warning(u'Failed to parse pointer update: %s' % e)
         elif updateCode == data.FastPathUpdateType.FASTPATH_UPDATETYPE_SURFCMDS:
             try:
                 self._handleSurfaceCommands(payload)
             except Exception as e:
-                log.warning("Failed to handle surface commands: %s" % e)
+                log.warning(u'Failed to handle surface commands: %s' % e)
 
     def readDataPDU(self, dataPDU):
         """
         @summary: read a data PDU object
         @param dataPDU: DataPDU object
         """
-        log.debug("PDULayer.readDataPDU()")
+        log.debug(u'PDULayer.readDataPDU()')
         if dataPDU.shareDataHeader.pduType2.value == data.PDUType2.PDUTYPE2_SET_ERROR_INFO_PDU:
             #ignore 0 error code because is not an error code
             if dataPDU.pduData.errorInfo.value == 0:
                 return
             errorCode = dataPDU.pduData.errorInfo.value
-            errorMessage = "Unknown code %s" % hex(errorCode)
+            errorMessage = u'Unknown code %s' % hex(errorCode)
             if errorCode in data.ErrorInfo._MESSAGES_:
                 errorMessage = data.ErrorInfo._MESSAGES_[errorCode]
-            log.error("INFO PDU : %s" % errorMessage)
+            log.error(u'INFO PDU : %s' % errorMessage)
             onErrorInfo = getattr(self._listener, 'onErrorInfo', None)
             if onErrorInfo is not None:
                 onErrorInfo(errorCode, errorMessage)
@@ -556,7 +585,7 @@ class Client(PDULayer):
                 try:
                     onSessionInfo(dataPDU.pduData.infoType.value, bytes(dataPDU.pduData.infoData.value))
                 except Exception as e:
-                    log.debug("Save Session Info not decoded: %s" % e)
+                    log.debug(u'Save Session Info not decoded: %s' % e)
             self._listener.onSessionReady()
         elif dataPDU.shareDataHeader.pduType2.value == data.PDUType2.PDUTYPE2_UPDATE:
             self.readUpdateDataPDU(dataPDU.pduData)
@@ -567,15 +596,23 @@ class Client(PDULayer):
         dispatch update data
         @param: {UpdateDataPDU} object
         """
-        log.debug("PDULayer.readUpdateDataPDU()")
+        log.debug(u'PDULayer.readUpdateDataPDU()')
         if updateDataPDU.updateType.value == data.UpdateType.UPDATETYPE_BITMAP:
             self._listener.onUpdate(updateDataPDU.updateData.rectangles._array)
+        elif updateDataPDU.updateType.value == data.UpdateType.UPDATETYPE_ORDERS and \
+                self._ordersHandler is not None:
+            # TS_UPDATE_ORDERS_PDU_DATA: pad2Octets, numberOrders, pad2Octets, orders
+            from struct import unpack_from
+            raw = getattr(getattr(updateDataPDU.updateData, '_value', None), 'value', None)
+            if raw is not None and len(raw) >= 6:
+                raw = bytes(raw)
+                self._ordersHandler.parseOrders(raw, 6, unpack_from('<H', raw, 2)[0])
 
     def sendConfirmActivePDU(self):
         """
         @summary: Send all client capabilities
         """
-        log.debug("PDULayer.sendConfirmActivePDU()")
+        log.debug(u'PDULayer.sendConfirmActivePDU()')
         #init general capability
         generalCapability = self._clientCapabilities[caps.CapsType.CAPSTYPE_GENERAL].capability
         generalCapability.osMajorType.value = caps.MajorType.OSMAJORTYPE_WINDOWS
@@ -661,6 +698,16 @@ class Client(PDULayer):
                                           caps.RemoteProgramsCapability.RAIL_LEVEL_WINDOW_CLOAKING_SUPPORTED |
                                           caps.RemoteProgramsCapability.RAIL_LEVEL_HANDSHAKE_EX_SUPPORTED)
 
+        #RemoteApp: window list capability (MS-RDPERP 2.2.1.1.2, FreeRDP RemoteWndSupportLevel)
+        if self._railEnabled:
+            if caps.CapsType.CAPSTYPE_WINDOW not in self._clientCapabilities:
+                self._clientCapabilities[caps.CapsType.CAPSTYPE_WINDOW] = caps.Capability(caps.WindowListCapability())
+            windowCap = self._clientCapabilities[caps.CapsType.CAPSTYPE_WINDOW].capability
+            windowCap.wndSupportLevel.value = (caps.WindowListCapability.TS_WINDOW_LEVEL_SUPPORTED |
+                                               caps.WindowListCapability.TS_WINDOW_LEVEL_SUPPORTED_EX)
+            windowCap.numIconCaches.value = 3
+            windowCap.numIconCacheEntries.value = 12
+
         #init multifragment update - large buffer for GFX
         multiFragCap = self._clientCapabilities[caps.CapsType.CAPSETTYPE_MULTIFRAGMENTUPDATE].capability
         multiFragCap.MaxRequestSize.value = 0x3F0000
@@ -697,7 +744,7 @@ class Client(PDULayer):
         """
         @summary: send a synchronize PDU from client to server
         """
-        log.debug("PDULayer.sendClientFinalizeSynchronizePDU()")
+        log.debug(u'PDULayer.sendClientFinalizeSynchronizePDU()')
         synchronizePDU = data.SynchronizeDataPDU(self._transport.getChannelId())
         self.sendDataPDU(synchronizePDU)
 
@@ -720,7 +767,7 @@ class Client(PDULayer):
         @summary: send client input events
         @param pointerEvents: list of pointer events
         """
-        log.debug("PDULayer.sendInputEvents()")
+        log.debug(u'PDULayer.sendInputEvents()')
         pdu = data.ClientInputEventPDU()
         pdu.slowPathInputEvents._array = [data.SlowPathInputEvent(x) for x in pointerEvents]
         self.sendDataPDU(pdu)
@@ -730,7 +777,7 @@ class Client(PDULayer):
         @summary: Send SuppressOutputPDU with ALLOW_DISPLAY_UPDATES.
         Required by GNOME Remote Desktop to start sending graphics.
         """
-        log.debug("PDULayer._sendSuppressOutput()")
+        log.debug(u'PDULayer._sendSuppressOutput()')
         suppressPDU = data.SupressOutputDataPDU()
         suppressPDU.allowDisplayUpdates.value = data.Display.ALLOW_DISPLAY_UPDATES
         suppressPDU.desktopRect.left.value = 0
@@ -753,7 +800,7 @@ class Client(PDULayer):
         """
         if not hasattr(self, '_gccCore'):
             return
-        log.debug("PDULayer.requestFullRefresh()")
+        log.debug(u'PDULayer.requestFullRefresh()')
         try:
             suppressPDU = data.SupressOutputDataPDU()
             suppressPDU.allowDisplayUpdates.value = data.Display.SUPPRESS_DISPLAY_UPDATES
@@ -767,7 +814,7 @@ class Client(PDULayer):
             allowPDU.desktopRect.bottom.value = self._gccCore.desktopHeight.value
             self.sendDataPDU(allowPDU)
         except Exception as e:
-            log.debug("PDULayer.requestFullRefresh error: %s" % e)
+            log.debug(u'PDULayer.requestFullRefresh error: %s' % e)
 
     def _handleSurfaceCommands(self, surfData):
         """
@@ -778,21 +825,21 @@ class Client(PDULayer):
         @param surfData: raw bytes of surface command data
         @see: MS-RDPBCGR 2.2.9.1.2.1.10
         """
-        import struct
+        from struct import unpack_from
         from rdpy.protocol.rdp.nscodec import decode_nscodec
         from twisted.internet import reactor, threads
 
         offset = 0
         while offset + 2 <= len(surfData):
-            cmdType = struct.unpack_from('<H', surfData, offset)[0]
+            cmdType = unpack_from('<H', surfData, offset)[0]
             offset += 2
 
             if cmdType == data.SurfaceCommand.CMDTYPE_FRAME_MARKER:
                 # frameAction(2) + frameId(4) = 6 bytes
                 if offset + 6 > len(surfData):
                     break
-                frameAction = struct.unpack_from('<H', surfData, offset)[0]
-                frameId = struct.unpack_from('<I', surfData, offset + 2)[0]
+                frameAction = unpack_from('<H', surfData, offset)[0]
+                frameId = unpack_from('<I', surfData, offset + 2)[0]
                 offset += 6
                 if frameAction == data.FrameMarkerAction.FRAME_END:
                     # acknowledged once the frame's bitmaps are decoded (in order)
@@ -805,18 +852,18 @@ class Client(PDULayer):
                 # Total header after cmdType: 20 bytes
                 if offset + 20 > len(surfData):
                     break
-                destLeft = struct.unpack_from('<H', surfData, offset)[0]
-                destTop = struct.unpack_from('<H', surfData, offset + 2)[0]
-                destRight = struct.unpack_from('<H', surfData, offset + 4)[0]
-                destBottom = struct.unpack_from('<H', surfData, offset + 6)[0]
+                destLeft = unpack_from('<H', surfData, offset)[0]
+                destTop = unpack_from('<H', surfData, offset + 2)[0]
+                destRight = unpack_from('<H', surfData, offset + 4)[0]
+                destBottom = unpack_from('<H', surfData, offset + 6)[0]
 
                 bpp = surfData[offset + 8]
                 flags = surfData[offset + 9]
                 # reserved = surfData[offset + 10]
                 codecID = surfData[offset + 11]
-                width = struct.unpack_from('<H', surfData, offset + 12)[0]
-                height = struct.unpack_from('<H', surfData, offset + 14)[0]
-                bitmapDataLength = struct.unpack_from('<I', surfData, offset + 16)[0]
+                width = unpack_from('<H', surfData, offset + 12)[0]
+                height = unpack_from('<H', surfData, offset + 14)[0]
+                bitmapDataLength = unpack_from('<I', surfData, offset + 16)[0]
                 offset += 20
 
                 # EX_COMPRESSED_BITMAP_HEADER_PRESENT: a 24-byte TS_COMPRESSED_BITMAP_HEADER_EX
@@ -828,7 +875,7 @@ class Client(PDULayer):
                     offset += 24
 
                 if offset + bitmapDataLength > len(surfData):
-                    log.warning("Surface bits data truncated")
+                    log.warning(u'Surface bits data truncated')
                     break
 
                 bitmapData = surfData[offset:offset + bitmapDataLength]
@@ -841,10 +888,10 @@ class Client(PDULayer):
                     self._surfaceQueue(('bits', codecID, bytes(bitmapData), width, height, bpp,
                                         destLeft, destTop, destRight, destBottom))
                 else:
-                    log.warning("Unsupported surface codec: %d" % codecID)
+                    log.warning(u'Unsupported surface codec: %d' % codecID)
                     continue
             else:
-                log.debug("Unknown surface command type: %s" % hex(cmdType))
+                log.debug(u'Unknown surface command type: %s' % hex(cmdType))
                 break
 
     def _surfaceQueue(self, item):
@@ -855,10 +902,10 @@ class Client(PDULayer):
         """
         worker = getattr(self, '_surfaceWorker', None)
         if worker is None:
-            import threading
+            from threading import Thread
             from rdpy.core.compat import queue
             self._surfaceItems = queue.Queue()
-            worker = threading.Thread(target=self._surfaceWorkerLoop, name="rdp-surface-bits")
+            worker = Thread(target=self._surfaceWorkerLoop, name=u'rdp-surface-bits')
             worker.daemon = True  # never keeps the application alive
             self._surfaceWorker = worker
             worker.start()
@@ -874,7 +921,7 @@ class Client(PDULayer):
     def _surfaceWorkerLoop(self):
         from twisted.internet import reactor
         from rdpy.protocol.rdp.nscodec import decode_nscodec
-        import numpy as _np
+        from numpy import frombuffer, uint8
         items = self._surfaceItems
         while True:
             item = items.get()
@@ -890,27 +937,27 @@ class Client(PDULayer):
                 if codecID == 1:
                     raw = decode_nscodec(bitmapData, width, height)
                     if raw is None:
-                        log.warning("surface bits: NSCodec bitmap %dx%d not decoded" % (width, height))
+                        log.warning(u'surface bits: NSCodec bitmap %dx%d not decoded' % (width, height))
                         continue
-                    pixels = _np.frombuffer(raw, dtype=_np.uint8).reshape(height, width, 4)[::-1].tobytes()
+                    pixels = frombuffer(raw, dtype=uint8).reshape(height, width, 4)[::-1].tobytes()
                 else:
                     pixels = uncompressedToBgra(bitmapData, width, height, bpp)
                     if pixels is None:
-                        log.warning("surface bits: unsupported uncompressed %d bpp bitmap" % bpp)
+                        log.warning(u'surface bits: unsupported uncompressed %d bpp bitmap' % bpp)
                         continue
                 bpp = 32
                 if hasattr(self._listener, '_onGfxBitmap'):
                     reactor.callFromThread(self._listener._onGfxBitmap, left, top, right, bottom,
                                            width, height, bpp, 'gfx', pixels)
             except Exception as e:
-                log.warning("surface bits decode error: %r" % (e,))
+                log.warning(u'surface bits decode error: %r' % (e,))
 
     def _sendFrameAcknowledge(self, frameId):
         """
         @summary: Send frame acknowledge PDU for GFX frame marker
         @param frameId: frame ID to acknowledge
         """
-        log.debug("PDULayer._sendFrameAcknowledge(frameId=%d)" % frameId)
+        log.debug(u'PDULayer._sendFrameAcknowledge(frameId=%d)' % frameId)
         frameAckData = data.FrameAcknowledgeDataPDU(frameId)
         self.sendDataPDU(frameAckData)
 
@@ -919,7 +966,7 @@ class Client(PDULayer):
         @summary: Handle server redirection PDU
         @param redirPDU: ServerRedirectionPDU object
         """
-        log.debug("Server redirection requested")
+        log.debug(u'Server redirection requested')
         if hasattr(self._listener, 'onRedirect'):
             self._listener.onRedirect(redirPDU)
 
@@ -952,14 +999,14 @@ class Server(PDULayer):
         Wait Client Synchronize PDU
         @param s: Stream
         """
-        log.debug("PDULayer.recvConfirmActivePDU()")
+        log.debug(u'PDULayer.recvConfirmActivePDU()')
         pdu = data.PDU()
         s.readType(pdu)
 
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_CONFIRMACTIVEPDU:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvConfirmActivePDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvConfirmActivePDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
 
@@ -982,13 +1029,13 @@ class Server(PDULayer):
         Wait Control Cooperate PDU
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvClientSynchronizePDU()")
+        log.debug(u'PDULayer.recvClientSynchronizePDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DATAPDU or pdu.pduMessage.shareDataHeader.pduType2.value != data.PDUType2.PDUTYPE2_SYNCHRONIZE:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvClientSynchronizePDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvClientSynchronizePDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
         self.setNextState(self.recvClientControlCooperatePDU)
@@ -999,13 +1046,13 @@ class Server(PDULayer):
         Wait Control Request PDU
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvClientControlCooperatePDU()")
+        log.debug(u'PDULayer.recvClientControlCooperatePDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DATAPDU or pdu.pduMessage.shareDataHeader.pduType2.value != data.PDUType2.PDUTYPE2_CONTROL or pdu.pduMessage.pduData.action.value != data.Action.CTRLACTION_COOPERATE:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvClientControlCooperatePDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvClientControlCooperatePDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
         self.setNextState(self.recvClientControlRequestPDU)
@@ -1016,13 +1063,13 @@ class Server(PDULayer):
         Wait Font List PDU
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvClientControlRequestPDU()")
+        log.debug(u'PDULayer.recvClientControlRequestPDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DATAPDU or pdu.pduMessage.shareDataHeader.pduType2.value != data.PDUType2.PDUTYPE2_CONTROL or pdu.pduMessage.pduData.action.value != data.Action.CTRLACTION_REQUEST_CONTROL:
             #not a blocking error because in deactive reactive sequence 
             #input can be send too but ignored
-            log.debug("recvClientControlRequestPDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvClientControlRequestPDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
         self.setNextState(self.recvClientFontListPDU)
@@ -1034,13 +1081,13 @@ class Server(PDULayer):
         Wait any PDU
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvClientFontListPDU()")
+        log.debug(u'PDULayer.recvClientFontListPDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value != data.PDUType.PDUTYPE_DATAPDU or pdu.pduMessage.shareDataHeader.pduType2.value != data.PDUType2.PDUTYPE2_FONTLIST:
             #not a blocking error because in deactive reactive sequence 
             #input can be send but ignored
-            log.debug("recvClientFontListPDU() Ignore message type %s during connection sequence" % hex(
+            log.debug(u'recvClientFontListPDU() Ignore message type %s during connection sequence' % hex(
                 pdu.shareControlHeader.pduType.value))
             return
 
@@ -1055,7 +1102,7 @@ class Server(PDULayer):
         @summary: Main receive function after connection sequence
         @param s: Stream from transport layer
         """
-        log.debug("PDULayer.recvPDU()")
+        log.debug(u'PDULayer.recvPDU()')
         pdu = data.PDU()
         s.readType(pdu)
         if pdu.shareControlHeader.pduType.value == data.PDUType.PDUTYPE_DATAPDU:
@@ -1066,18 +1113,18 @@ class Server(PDULayer):
         @summary: read a data PDU object
         @param dataPDU: DataPDU object
         """
-        log.debug("PDULayer.readDataPDU()")
+        log.debug(u'PDULayer.readDataPDU()')
         if dataPDU.shareDataHeader.pduType2.value == data.PDUType2.PDUTYPE2_SET_ERROR_INFO_PDU:
-            errorMessage = "Unknown code %s" % hex(dataPDU.pduData.errorInfo.value)
+            errorMessage = u'Unknown code %s' % hex(dataPDU.pduData.errorInfo.value)
             if data.ErrorInfo._MESSAGES_.has_key(dataPDU.pduData.errorInfo):
                 errorMessage = data.ErrorInfo._MESSAGES_[dataPDU.pduData.errorInfo]
-            log.error("INFO PDU : %s" % errorMessage)
+            log.error(u'INFO PDU : %s' % errorMessage)
 
         elif dataPDU.shareDataHeader.pduType2.value == data.PDUType2.PDUTYPE2_INPUT:
             self._listener.onSlowPathInput(dataPDU.pduData.slowPathInputEvents._array)
 
         elif dataPDU.shareDataHeader.pduType2.value == data.PDUType2.PDUTYPE2_SHUTDOWN_REQUEST:
-            log.debug("Receive Shutdown Request")
+            log.debug(u'Receive Shutdown Request')
             self._transport.close()
 
     def recvFastPath(self, fastPathS):
@@ -1086,14 +1133,14 @@ class Server(PDULayer):
         Fast path is needed by RDP 8.0
         @param fastPathS: Stream that contain fast path data
         """
-        log.debug("PDULayer.readFlashPath()")
+        log.debug(u'PDULayer.readFlashPath()')
         pass
 
     def sendDemandActivePDU(self):
         """
         @summary: Send server capabilities server automata PDU
         """
-        log.debug("PDULayer.sendDemandActivePDU()")
+        log.debug(u'PDULayer.sendDemandActivePDU()')
         #init general capability
         generalCapability = self._serverCapabilities[caps.CapsType.CAPSTYPE_GENERAL].capability
         generalCapability.osMajorType.value = caps.MajorType.OSMAJORTYPE_WINDOWS
@@ -1112,7 +1159,7 @@ class Server(PDULayer):
         """
         @summary: Send last synchronize packet from server to client
         """
-        log.debug("PDULayer.sendServerFinalizeSynchronizePDU()")
+        log.debug(u'PDULayer.sendServerFinalizeSynchronizePDU()')
         synchronizePDU = data.SynchronizeDataPDU(self._transport.getChannelId())
         self.sendDataPDU(synchronizePDU)
 
@@ -1135,7 +1182,7 @@ class Server(PDULayer):
         @summary: Send a PDU data to transport layer
         @param pduMessage: PDU message
         """
-        log.debug("PDULayer.sendPDU()")
+        log.debug(u'PDULayer.sendPDU()')
         PDULayer.sendPDU(self, pduMessage)
         #restart capabilities exchange in case of deactive reactive sequence
         if isinstance(pduMessage, data.DeactiveAllPDU):
@@ -1147,7 +1194,7 @@ class Server(PDULayer):
         @summary: Send bitmap update data
         @param bitmapDatas: List of data.BitmapData
         """
-        log.debug("PDULayer.sendBitmapUpdatePDU()")
+        log.debug(u'PDULayer.sendBitmapUpdatePDU()')
         #check bitmap header for client that want it (very old client)
         if self._clientCapabilities[
             caps.CapsType.CAPSTYPE_GENERAL].capability.extraFlags.value & caps.GeneralExtraFlag.NO_BITMAP_COMPRESSION_HDR:

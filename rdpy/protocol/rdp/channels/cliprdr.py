@@ -18,25 +18,23 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 CLIPRDR - Clipboard Virtual Channel Extension (MS-RDPECLIP).
 Handles the "cliprdr" static virtual channel for bidirectional
 clipboard sharing between the RDP client and server: text
 (CF_UNICODETEXT / CF_TEXT) and files in both directions (FileGroupDescriptorW
 + File Contents, see cliprdr_file.py).
-
 Protocol reference: [MS-RDPECLIP]
 https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpeclip/
 """
 from __future__ import absolute_import, division, print_function
-
-import os
-import struct
+from struct import pack, unpack_from
+from os.path import exists
+from os import environ
+from rdpy.protocol.rdp.channels.cliprdr_file import FILECONTENTS_SIZE, FILECONTENTS_RANGE
+from rdpy.protocol.rdp.channels import cliprdr_file
 from rdpy.core.layer import LayerAutomata
-import rdpy.core.log as log
-from rdpy.protocol.rdp import cliprdr_file
-from rdpy.protocol.rdp.cliprdr_file import FILECONTENTS_SIZE, FILECONTENTS_RANGE
+from rdpy.core import log
 
 # Virtual Channel PDU flags
 CHANNEL_FLAG_FIRST = 0x00000001
@@ -72,20 +70,19 @@ CB_CAPSTYPE_GENERAL = 0x0001
 # Format id we use for "FileGroupDescriptorW" (registered formats are >= 0xC000)
 CF_FILE_GROUP_DESCRIPTOR = 0xC0FE
 # Largest download accepted when files are copied on the server (MB)
-_MAX_DOWNLOAD_MB = int(os.environ.get('RDPY_CLIPBOARD_MAX_MB', '4096'))
-
+_MAX_DOWNLOAD_MB = int(environ.get('RDPY_CLIPBOARD_MAX_MB', '4096'))
 _MSG_NAMES = {
-    CB_MONITOR_READY: "MONITOR_READY",
-    CB_FORMAT_LIST: "FORMAT_LIST",
-    CB_FORMAT_LIST_RESPONSE: "FORMAT_LIST_RESPONSE",
-    CB_FORMAT_DATA_REQUEST: "FORMAT_DATA_REQUEST",
-    CB_FORMAT_DATA_RESPONSE: "FORMAT_DATA_RESPONSE",
-    CB_TEMP_DIRECTORY: "TEMP_DIRECTORY",
-    CB_CLIP_CAPS: "CLIP_CAPS",
-    CB_FILECONTENTS_REQUEST: "FILECONTENTS_REQUEST",
-    CB_FILECONTENTS_RESPONSE: "FILECONTENTS_RESPONSE",
-    CB_LOCK_CLIPDATA: "LOCK_CLIPDATA",
-    CB_UNLOCK_CLIPDATA: "UNLOCK_CLIPDATA",
+    CB_MONITOR_READY: u'MONITOR_READY',
+    CB_FORMAT_LIST: u'FORMAT_LIST',
+    CB_FORMAT_LIST_RESPONSE: u'FORMAT_LIST_RESPONSE',
+    CB_FORMAT_DATA_REQUEST: u'FORMAT_DATA_REQUEST',
+    CB_FORMAT_DATA_RESPONSE: u'FORMAT_DATA_RESPONSE',
+    CB_TEMP_DIRECTORY: u'TEMP_DIRECTORY',
+    CB_CLIP_CAPS: u'CLIP_CAPS',
+    CB_FILECONTENTS_REQUEST: u'FILECONTENTS_REQUEST',
+    CB_FILECONTENTS_RESPONSE: u'FILECONTENTS_RESPONSE',
+    CB_LOCK_CLIPDATA: u'LOCK_CLIPDATA',
+    CB_UNLOCK_CLIPDATA: u'UNLOCK_CLIPDATA',
 }
 
 
@@ -113,17 +110,17 @@ class CliprdrLayer(LayerAutomata):
         # to avoid echo loops (server→client paste triggers local clipboard change)
         self._suppressNextLocalChange = False
         # --- file transfer ---
-        self._getLocalFiles = None        # callback() -> [local paths]
-        self._onRemoteFiles = None        # callback([local paths]) once downloaded
-        self._localFilePaths = []         # paths offered in our last Format List
-        self._localFileList = None        # LocalFileList built when the server asks
-        self._lockedLists = {}            # clipDataId -> LocalFileList (server locks)
-        self._pendingFormat = None        # format of our outstanding Format Data Request
-        self._download = None             # RemoteDownload in progress
+        self._getLocalFiles = None  # callback() -> [local paths]
+        self._onRemoteFiles = None  # callback([local paths]) once downloaded
+        self._localFilePaths = []  # paths offered in our last Format List
+        self._localFileList = None  # LocalFileList built when the server asks
+        self._lockedLists = {}  # clipDataId -> LocalFileList (server locks)
+        self._pendingFormat = None  # format of our outstanding Format Data Request
+        self._download = None  # RemoteDownload in progress
         self._nextStreamId = 1
         self._nextClipDataId = 1
-        self._transferListener = None     # see setTransferListener
-        self._uploads = {}                # id(LocalFileList) -> _UploadProgress
+        self._transferListener = None  # see setTransferListener
+        self._uploads = {}  # id(LocalFileList) -> _UploadProgress
 
     def setRemoteClipboardCallback(self, callback):
         """Set callback(text: str) invoked when server clipboard data arrives."""
@@ -163,26 +160,26 @@ class CliprdrLayer(LayerAutomata):
             try:
                 callback(*args)
             except Exception as e:
-                log.warning("CLIPRDR: transfer listener %s failed: %s" % (name, e))
+                log.warning(u'CLIPRDR: transfer listener %s failed: %s' % (name, e))
 
     def _fileTransferEnabled(self):
         return bool(getattr(self, '_filesAllowed', True) and self._useLongFormatNames and
                     self._serverGeneralFlags & CB_STREAM_FILECLIP_ENABLED)
 
     def connect(self):
-        log.debug("CliprdrLayer.connect()")
+        log.debug(u'CliprdrLayer.connect()')
 
     def recv(self, s):
         """Receive data on the cliprdr static virtual channel with VChannel reassembly."""
         data = s.read()
-        log.debug("CLIPRDR DEBUG: recv() called, data length=%d" % len(data))
+        log.debug(u'CLIPRDR DEBUG: recv() called, data length=%d' % len(data))
         if len(data) < 8:
-            log.warning("CLIPRDR: recv data too short (%d bytes)" % len(data))
+            log.warning(u'CLIPRDR: recv data too short (%d bytes)' % len(data))
             return
-        totalLen = struct.unpack_from('<I', data, 0)[0]
-        flags = struct.unpack_from('<I', data, 4)[0]
+        totalLen = unpack_from('<I', data, 0)[0]
+        flags = unpack_from('<I', data, 4)[0]
         payload = data[8:]
-        log.debug("CLIPRDR DEBUG: recv totalLen=%d flags=0x%08x payloadLen=%d" % (totalLen, flags, len(payload)))
+        log.debug(u'CLIPRDR DEBUG: recv totalLen=%d flags=0x%08x payloadLen=%d' % (totalLen, flags, len(payload)))
 
         if flags & CHANNEL_FLAG_FIRST:
             self._vchanBuf = payload
@@ -190,7 +187,7 @@ class CliprdrLayer(LayerAutomata):
             self._vchanBuf += payload
 
         if flags & CHANNEL_FLAG_LAST:
-            log.debug("CLIPRDR DEBUG: reassembled %d bytes, processing" % len(self._vchanBuf))
+            log.debug(u'CLIPRDR DEBUG: reassembled %d bytes, processing' % len(self._vchanBuf))
             if len(self._vchanBuf) >= 1:
                 self._processData(bytes(self._vchanBuf))
             self._vchanBuf = b''
@@ -201,14 +198,12 @@ class CliprdrLayer(LayerAutomata):
             return
 
         # CLIPRDR_HEADER: msgType(2) + msgFlags(2) + dataLen(4)
-        msgType = struct.unpack_from('<H', data, 0)[0]
-        msgFlags = struct.unpack_from('<H', data, 2)[0]
-        dataLen = struct.unpack_from('<I', data, 4)[0]
+        msgType = unpack_from('<H', data, 0)[0]
+        msgFlags = unpack_from('<H', data, 2)[0]
+        dataLen = unpack_from('<I', data, 4)[0]
         body = data[8:8 + dataLen]
-
-        log.debug("CLIPRDR: recv %s(0x%04x) flags=0x%04x dataLen=%d" %
-                  (_MSG_NAMES.get(msgType, "?"), msgType, msgFlags, dataLen))
-
+        log.debug(u'CLIPRDR: recv %s(0x%04x) flags=0x%04x dataLen=%d' %
+                  (_MSG_NAMES.get(msgType, u'?'), msgType, msgFlags, dataLen))
         if msgType == CB_CLIP_CAPS:
             self._processClipCaps(body)
         elif msgType == CB_MONITOR_READY:
@@ -230,7 +225,7 @@ class CliprdrLayer(LayerAutomata):
         elif msgType == CB_UNLOCK_CLIPDATA:
             self._processUnlockClipData(body)
         else:
-            log.debug("CLIPRDR: unhandled msgType=0x%04x" % msgType)
+            log.debug(u'CLIPRDR: unhandled msgType=0x%04x' % msgType)
 
     # -------------------------------------------------------------------
     # Clipboard Capabilities (MS-RDPECLIP 2.2.2.1)
@@ -240,20 +235,20 @@ class CliprdrLayer(LayerAutomata):
         """Parse Clipboard Capabilities PDU from server."""
         if len(body) < 4:
             return
-        cCapabilitySets = struct.unpack_from('<H', body, 0)[0]
+        cCapabilitySets = unpack_from('<H', body, 0)[0]
         # pad1(2)
         offset = 4
         for _ in range(cCapabilitySets):
             if offset + 4 > len(body):
                 break
-            capType = struct.unpack_from('<H', body, offset)[0]
-            capLen = struct.unpack_from('<H', body, offset + 2)[0]
+            capType = unpack_from('<H', body, offset)[0]
+            capLen = unpack_from('<H', body, offset + 2)[0]
             if capType == CB_CAPSTYPE_GENERAL and capLen >= 12:
                 # version(4) + generalFlags(4)
-                self._serverGeneralFlags = struct.unpack_from('<I', body, offset + 8)[0]
+                self._serverGeneralFlags = unpack_from('<I', body, offset + 8)[0]
                 self._useLongFormatNames = bool(
                     self._serverGeneralFlags & CB_USE_LONG_FORMAT_NAMES)
-                log.debug("CLIPRDR: server generalFlags=0x%08x longNames=%s" %
+                log.debug(u'CLIPRDR: server generalFlags=0x%08x longNames=%s' %
                           (self._serverGeneralFlags, self._useLongFormatNames))
             offset += capLen
 
@@ -264,14 +259,14 @@ class CliprdrLayer(LayerAutomata):
         if getattr(self, '_filesAllowed', True):
             generalFlags |= (CB_STREAM_FILECLIP_ENABLED | CB_FILECLIP_NO_FILE_PATHS |
                              CB_CAN_LOCK_CLIPDATA | CB_HUGE_FILE_SUPPORT_ENABLED)
-        capSet = struct.pack('<HH', CB_CAPSTYPE_GENERAL, 12)
-        capSet += struct.pack('<I', 2)  # version 2
-        capSet += struct.pack('<I', generalFlags)
+        capSet = pack('<HH', CB_CAPSTYPE_GENERAL, 12)
+        capSet += pack('<I', 2)  # version 2
+        capSet += pack('<I', generalFlags)
 
         # cCapabilitySets(2) + pad1(2) + capabilitySet
-        body = struct.pack('<HH', 1, 0) + capSet
+        body = pack('<HH', 1, 0) + capSet
         self._sendPDU(CB_CLIP_CAPS, 0, body)
-        log.debug("CLIPRDR: sent Clip Caps")
+        log.debug(u'CLIPRDR: sent Clip Caps')
 
     # -------------------------------------------------------------------
     # Monitor Ready (MS-RDPECLIP 2.2.2.2)
@@ -279,7 +274,7 @@ class CliprdrLayer(LayerAutomata):
 
     def _processMonitorReady(self, body):
         """Handle Monitor Ready PDU: server is ready for clipboard exchange."""
-        log.debug("CLIPRDR: server Monitor Ready")
+        log.debug(u'CLIPRDR: server Monitor Ready')
         # Respond with our capabilities and an initial format list
         self._sendClipCaps()
         self._sendFormatList()
@@ -296,30 +291,30 @@ class CliprdrLayer(LayerAutomata):
         self._localFileList = None
         if self._fileTransferEnabled() and self._getLocalFiles is not None:
             try:
-                self._localFilePaths = [p for p in (self._getLocalFiles() or []) if os.path.exists(p)]
+                self._localFilePaths = [p for p in (self._getLocalFiles() or []) if exists(p)]
             except Exception as e:
-                log.warning("CLIPRDR: cannot read the local file list: %s" % e)
-        formats = [(CF_UNICODETEXT, "")]
+                log.warning(u'CLIPRDR: cannot read the local file list: %s' % e)
+        formats = [(CF_UNICODETEXT, u'')]
         if self._localFilePaths:
             formats.append((CF_FILE_GROUP_DESCRIPTOR, cliprdr_file.FORMAT_NAME_FILE_GROUP_DESCRIPTOR))
         body = b''
         for fmtId, name in formats:
             if self._useLongFormatNames:
                 # Long Format Name: formatId(4) + wszFormatName (null-terminated UTF-16LE)
-                body += struct.pack('<I', fmtId) + (name + '\0').encode('utf-16-le')
+                body += pack('<I', fmtId) + (name + '\0').encode('utf-16-le')
             else:
                 # Short Format Name: formatId(4) + formatName[32]
-                body += struct.pack('<I', fmtId) + name.encode('utf-16-le')[:30].ljust(32, b'\x00')
+                body += pack('<I', fmtId) + name.encode('utf-16-le')[:30].ljust(32, b'\x00')
         self._sendPDU(CB_FORMAT_LIST, 0, body)
-        log.debug("CLIPRDR: sent Format List %s" % formats)
+        log.debug(u'CLIPRDR: sent Format List %s' % formats)
         if self._localFilePaths:
-            log.info("clipboard: %d local item(s) ready to paste on the server" % len(self._localFilePaths))
+            log.info(u'clipboard: %d local item(s) ready to paste on the server' % len(self._localFilePaths))
 
     def _processFormatList(self, body, msgFlags):
         """Handle Format List PDU from server (server clipboard changed)."""
         # Parse formats offered by the server
         formats = self._parseFormatList(body, msgFlags)
-        log.debug("CLIPRDR: server Format List: %s" % formats)
+        log.debug(u'CLIPRDR: server Format List: %s' % formats)
 
         # Always respond with OK
         self._sendPDU(CB_FORMAT_LIST_RESPONSE, CB_RESPONSE_OK, b'')
@@ -355,7 +350,7 @@ class CliprdrLayer(LayerAutomata):
             # Long Format Names (MS-RDPECLIP 2.2.3.1.1.1)
             offset = 0
             while offset + 4 <= len(body):
-                fmtId = struct.unpack_from('<I', body, offset)[0]
+                fmtId = unpack_from('<I', body, offset)[0]
                 offset += 4
                 # Read null-terminated UTF-16LE string
                 nameEnd = offset
@@ -370,7 +365,7 @@ class CliprdrLayer(LayerAutomata):
             # Short Format Names (MS-RDPECLIP 2.2.3.1.1.2)
             offset = 0
             while offset + 36 <= len(body):
-                fmtId = struct.unpack_from('<I', body, offset)[0]
+                fmtId = unpack_from('<I', body, offset)[0]
                 nameBytes = body[offset + 4:offset + 36]
                 if msgFlags & CB_ASCII_NAMES:
                     name = nameBytes.split(b'\x00')[0].decode('ascii', errors='replace')
@@ -383,9 +378,9 @@ class CliprdrLayer(LayerAutomata):
     def _processFormatListResponse(self, msgFlags):
         """Handle Format List Response (acknowledgement from server)."""
         if msgFlags & CB_RESPONSE_OK:
-            log.debug("CLIPRDR: Format List Response OK")
+            log.debug(u'CLIPRDR: Format List Response OK')
         else:
-            log.warning("CLIPRDR: Format List Response FAIL")
+            log.warning(u'CLIPRDR: Format List Response FAIL')
 
     # -------------------------------------------------------------------
     # Format Data Request / Response (MS-RDPECLIP 2.2.5)
@@ -393,10 +388,10 @@ class CliprdrLayer(LayerAutomata):
 
     def _sendFormatDataRequest(self, formatId):
         """Send Format Data Request to server."""
-        body = struct.pack('<I', formatId)
+        body = pack('<I', formatId)
         self._pendingFormat = formatId
         self._sendPDU(CB_FORMAT_DATA_REQUEST, 0, body)
-        log.debug("CLIPRDR: sent Format Data Request formatId=%d" % formatId)
+        log.debug(u'CLIPRDR: sent Format Data Request formatId=%d' % formatId)
 
     def _processFormatDataRequest(self, body):
         """Handle Format Data Request from server (server wants our clipboard)."""
@@ -404,8 +399,8 @@ class CliprdrLayer(LayerAutomata):
             self._sendPDU(CB_FORMAT_DATA_RESPONSE, CB_RESPONSE_FAIL, b'')
             return
 
-        requestedFormat = struct.unpack_from('<I', body, 0)[0]
-        log.debug("CLIPRDR: server requests format %d" % requestedFormat)
+        requestedFormat = unpack_from('<I', body, 0)[0]
+        log.debug(u'CLIPRDR: server requests format %d' % requestedFormat)
 
         if requestedFormat == CF_FILE_GROUP_DESCRIPTOR:
             fileList = self._currentLocalFileList()
@@ -413,7 +408,7 @@ class CliprdrLayer(LayerAutomata):
                 self._sendPDU(CB_FORMAT_DATA_RESPONSE, CB_RESPONSE_FAIL, b'')
                 return
             self._sendPDU(CB_FORMAT_DATA_RESPONSE, CB_RESPONSE_OK, fileList.descriptors())
-            log.info("clipboard: sending %d file(s) / folder(s) to the server" % len(fileList.entries))
+            log.info(u'clipboard: sending %d file(s) / folder(s) to the server' % len(fileList.entries))
             self._uploadFor(fileList)
             return
 
@@ -428,14 +423,14 @@ class CliprdrLayer(LayerAutomata):
         if requestedFormat == CF_UNICODETEXT:
             encoded = (text + '\0').encode('utf-16-le')
             if len(encoded) > _MAX_CLIP_BYTES:
-                log.warning("CLIPRDR: clipboard text too large (%d bytes), truncating" % len(encoded))
+                log.warning(u'CLIPRDR: clipboard text too large (%d bytes), truncating' % len(encoded))
                 # Truncate to an even byte boundary (UTF-16LE)
                 encoded = encoded[:_MAX_CLIP_BYTES & ~1]
             self._sendPDU(CB_FORMAT_DATA_RESPONSE, CB_RESPONSE_OK, encoded)
         elif requestedFormat == CF_TEXT:
             encoded = (text + '\0').encode('ascii', errors='replace')
             if len(encoded) > _MAX_CLIP_BYTES:
-                log.warning("CLIPRDR: clipboard text too large (%d bytes), truncating" % len(encoded))
+                log.warning(u'CLIPRDR: clipboard text too large (%d bytes), truncating' % len(encoded))
                 encoded = encoded[:_MAX_CLIP_BYTES]
             self._sendPDU(CB_FORMAT_DATA_RESPONSE, CB_RESPONSE_OK, encoded)
         else:
@@ -446,7 +441,7 @@ class CliprdrLayer(LayerAutomata):
         requested = self._pendingFormat
         self._pendingFormat = None
         if not (msgFlags & CB_RESPONSE_OK):
-            log.warning("CLIPRDR: Format Data Response FAIL")
+            log.warning(u'CLIPRDR: Format Data Response FAIL')
             if self._download is not None:
                 self._abortDownload()
             return
@@ -468,7 +463,7 @@ class CliprdrLayer(LayerAutomata):
         text = text.rstrip('\x00')
 
         if text and self._onRemoteClipboardChanged is not None:
-            log.debug("CLIPRDR: received text (%d chars)" % len(text))
+            log.debug(u'CLIPRDR: received text (%d chars)' % len(text))
             self._suppressNextLocalChange = True
             self._onRemoteClipboardChanged(text)
 
@@ -483,12 +478,12 @@ class CliprdrLayer(LayerAutomata):
 
     def _processLockClipData(self, body):
         if len(body) >= 4:
-            clipDataId = struct.unpack_from('<I', body, 0)[0]
+            clipDataId = unpack_from('<I', body, 0)[0]
             self._lockedLists[clipDataId] = self._currentLocalFileList()
 
     def _processUnlockClipData(self, body):
         if len(body) >= 4:
-            fileList = self._lockedLists.pop(struct.unpack_from('<I', body, 0)[0], None)
+            fileList = self._lockedLists.pop(unpack_from('<I', body, 0)[0], None)
             if fileList is not None and fileList not in self._lockedLists.values():
                 self._endUpload(fileList)
 
@@ -511,28 +506,28 @@ class CliprdrLayer(LayerAutomata):
         """Serve the size or a byte range of one of our files."""
         if len(body) < 24:
             return
-        streamId, index, flags, posLow, posHigh, cbRequested = struct.unpack_from('<IIIIII', body, 0)
+        streamId, index, flags, posLow, posHigh, cbRequested = unpack_from('<IIIIII', body, 0)
         fileList = None
         if len(body) >= 28:
-            fileList = self._lockedLists.get(struct.unpack_from('<I', body, 24)[0])
+            fileList = self._lockedLists.get(unpack_from('<I', body, 24)[0])
         if fileList is None:
             fileList = self._currentLocalFileList()
         try:
             if fileList is None or index >= len(fileList.entries):
-                raise IndexError("no file %d" % index)
+                raise IndexError(u'no file %d' % index)
             if flags & FILECONTENTS_SIZE:
-                data = struct.pack('<Q', fileList.size(index))
+                data = pack('<Q', fileList.size(index))
             elif flags & FILECONTENTS_RANGE:
                 position = (posHigh << 32) | posLow
                 data = fileList.read(index, position, min(cbRequested, 8 * 1024 * 1024))
                 self._uploadFor(fileList).served(index, position + len(data))
             else:
-                raise ValueError("bad flags 0x%x" % flags)
+                raise ValueError(u'bad flags 0x%x' % flags)
         except (IndexError, ValueError, OSError) as e:
-            log.warning("clipboard: cannot send file %d: %s" % (index, e))
-            self._sendPDU(CB_FILECONTENTS_RESPONSE, CB_RESPONSE_FAIL, struct.pack('<I', streamId))
+            log.warning(u'clipboard: cannot send file %d: %s' % (index, e))
+            self._sendPDU(CB_FILECONTENTS_RESPONSE, CB_RESPONSE_FAIL, pack('<I', streamId))
             return
-        self._sendPDU(CB_FILECONTENTS_RESPONSE, CB_RESPONSE_OK, struct.pack('<I', streamId) + data)
+        self._sendPDU(CB_FILECONTENTS_RESPONSE, CB_RESPONSE_OK, pack('<I', streamId) + data)
 
     # -------------------------------------------------------------------
     # Files copied on the server -> local temporary folder
@@ -544,7 +539,7 @@ class CliprdrLayer(LayerAutomata):
             # keep the server's clipboard data alive during the download
             clipDataId = self._nextClipDataId
             self._nextClipDataId = (self._nextClipDataId + 1) & 0xFFFFFFFF or 1
-            self._sendPDU(CB_LOCK_CLIPDATA, 0, struct.pack('<I', clipDataId))
+            self._sendPDU(CB_LOCK_CLIPDATA, 0, pack('<I', clipDataId))
         self._download = _PendingDownload(formatId, clipDataId)
         self._sendFormatDataRequest(formatId)
 
@@ -556,8 +551,8 @@ class CliprdrLayer(LayerAutomata):
             return
         total = sum(e.size or 0 for e in entries if not e.isDir)
         if total > _MAX_DOWNLOAD_MB * 1024 * 1024:
-            log.warning("clipboard: %d MB copied on the server, above the %d MB limit "
-                        "(set RDPY_CLIPBOARD_MAX_MB to change it), not downloaded" %
+            log.warning(u'clipboard: %d MB copied on the server, above the %d MB limit '
+                        u'(set RDPY_CLIPBOARD_MAX_MB to change it), not downloaded' %
                         (total // (1024 * 1024), _MAX_DOWNLOAD_MB))
             self._abortDownload()
             return
@@ -566,12 +561,12 @@ class CliprdrLayer(LayerAutomata):
                                                    pending.clipDataId)
             download.prepare()
         except OSError as e:
-            log.warning("clipboard: cannot prepare the download: %s" % e)
+            log.warning(u'clipboard: cannot prepare the download: %s' % e)
             self._abortDownload()
             return
         download.formatId = pending.formatId
         self._download = download
-        log.info("clipboard: receiving %d item(s), %.1f MB, from the server" %
+        log.info(u'clipboard: receiving %d item(s), %.1f MB, from the server' %
                  (len(entries), total / 1048576.0))
         self._notify('onFileTransferStarted', 'download', len(entries), total)
         self._requestNextChunk()
@@ -581,7 +576,7 @@ class CliprdrLayer(LayerAutomata):
         try:
             request = download.nextRequest(self._nextStreamId)
         except OSError as e:
-            log.warning("clipboard: download failed: %s" % e)
+            log.warning(u'clipboard: download failed: %s' % e)
             self._abortDownload()
             return
         self._nextStreamId = (self._nextStreamId + 1) & 0xFFFFFFFF or 1
@@ -589,22 +584,22 @@ class CliprdrLayer(LayerAutomata):
             self._finishDownload()
             return
         streamId, index, flags, position, length = request
-        body = struct.pack('<IIIIII', streamId, index, flags, position & 0xFFFFFFFF,
-                           position >> 32, length)
+        body = pack('<IIIIII', streamId, index, flags, position & 0xFFFFFFFF,
+                    position >> 32, length)
         if download.clipDataId is not None:
-            body += struct.pack('<I', download.clipDataId)
+            body += pack('<I', download.clipDataId)
         self._sendPDU(CB_FILECONTENTS_REQUEST, 0, body)
 
     def _processFileContentsResponse(self, body, msgFlags):
         download = self._download
         if not isinstance(download, cliprdr_file.RemoteDownload) or len(body) < 4:
             return
-        if struct.unpack_from('<I', body, 0)[0] != download.streamId:
+        if unpack_from('<I', body, 0)[0] != download.streamId:
             return  # answer to an aborted request
         try:
             download.onResponse(bool(msgFlags & CB_RESPONSE_OK), body[4:])
         except OSError as e:
-            log.warning("clipboard: cannot write the downloaded file: %s" % e)
+            log.warning(u'clipboard: cannot write the downloaded file: %s' % e)
             self._abortDownload()
             return
         self._notify('onFileTransferProgress', 'download', download.received, download.total)
@@ -615,9 +610,9 @@ class CliprdrLayer(LayerAutomata):
         self._download = None
         self._unlock(download)
         elapsed = max(0.001, cliprdr_file.monotonic() - download.started)
-        log.info("clipboard: %d item(s) received (%.1f MB in %.1fs%s), paste them with Ctrl+V" %
+        log.info(u'clipboard: %d item(s) received (%.1f MB in %.1fs%s), paste them with Ctrl+V' %
                  (len(download.entries), download.received / 1048576.0, elapsed,
-                  ", %d failed" % download.failed if download.failed else ""))
+                  u', %d failed' % download.failed if download.failed else u''))
         if download.topLevel and self._onRemoteFiles is not None:
             self._suppressNextLocalChange = True
             self._onRemoteFiles(download.topLevel)
@@ -631,13 +626,13 @@ class CliprdrLayer(LayerAutomata):
         self._download = None
         if isinstance(download, cliprdr_file.RemoteDownload):
             download.abort()
-            log.info("clipboard: file download cancelled")
+            log.info(u'clipboard: file download cancelled')
             self._notify('onFileTransferFinished', 'download', [], download.received, 'cancelled')
         self._unlock(download)
 
     def _unlock(self, download):
         if download is not None and download.clipDataId is not None:
-            self._sendPDU(CB_UNLOCK_CLIPDATA, 0, struct.pack('<I', download.clipDataId))
+            self._sendPDU(CB_UNLOCK_CLIPDATA, 0, pack('<I', download.clipDataId))
 
     # -------------------------------------------------------------------
     # Public API for local clipboard changes
@@ -646,18 +641,18 @@ class CliprdrLayer(LayerAutomata):
     def onLocalClipboardChanged(self):
         """Called when the local clipboard content changes.
         Sends a Format List to the server to advertise new content."""
-        log.debug("CLIPRDR DEBUG: onLocalClipboardChanged() suppress=%s transport=%s" %
+        log.debug(u'CLIPRDR DEBUG: onLocalClipboardChanged() suppress=%s transport=%s' %
                   (self._suppressNextLocalChange,
-                   type(self._transport).__name__ if self._transport else "None"))
+                   type(self._transport).__name__ if self._transport else u'None'))
         if self._suppressNextLocalChange:
             self._suppressNextLocalChange = False
-            log.debug("CLIPRDR DEBUG: suppressed (echo prevention)")
+            log.debug(u'CLIPRDR DEBUG: suppressed (echo prevention)')
             return
         if self._transport is not None:
             self._sendFormatList()
-            log.debug("CLIPRDR: local clipboard changed, sent Format List")
+            log.debug(u'CLIPRDR: local clipboard changed, sent Format List')
         else:
-            log.warning("CLIPRDR DEBUG: local clipboard changed but transport is None!")
+            log.warning(u'CLIPRDR DEBUG: local clipboard changed but transport is None!')
 
     # -------------------------------------------------------------------
     # Send helpers
@@ -665,10 +660,10 @@ class CliprdrLayer(LayerAutomata):
 
     def _sendPDU(self, msgType, msgFlags, body):
         """Send a CLIPRDR PDU wrapped in VChannel header."""
-        log.debug("CLIPRDR DEBUG: _sendPDU type=%s(0x%04x) flags=0x%04x bodyLen=%d" %
-                  (_MSG_NAMES.get(msgType, "?"), msgType, msgFlags, len(body)))
+        log.debug(u'CLIPRDR DEBUG: _sendPDU type=%s(0x%04x) flags=0x%04x bodyLen=%d' %
+                  (_MSG_NAMES.get(msgType, u'?'), msgType, msgFlags, len(body)))
         # CLIPRDR_HEADER: msgType(2) + msgFlags(2) + dataLen(4) + body
-        cliprdrPdu = struct.pack('<HHI', msgType, msgFlags, len(body)) + body
+        cliprdrPdu = pack('<HHI', msgType, msgFlags, len(body)) + body
         self._send(cliprdrPdu)
 
     # VChannel chunk size negotiated in Virtual Channel Capability Set
@@ -681,10 +676,10 @@ class CliprdrLayer(LayerAutomata):
         VCChunkSize (1600 bytes).  Each chunk carries a VChannel header
         with totalLength and FIRST/LAST flags.
         """
-        log.debug("CLIPRDR DEBUG: _send() transport=%s dataLen=%d" %
-                  (type(self._transport).__name__ if self._transport else "None", len(data)))
+        log.debug(u'CLIPRDR DEBUG: _send() transport=%s dataLen=%d' %
+                  (type(self._transport).__name__ if self._transport else u'None', len(data)))
         if self._transport is None:
-            log.warning("CLIPRDR DEBUG: _send() SKIPPED - transport is None!")
+            log.warning(u'CLIPRDR DEBUG: _send() SKIPPED - transport is None!')
             return
 
         from rdpy.core.type import String
@@ -697,7 +692,7 @@ class CliprdrLayer(LayerAutomata):
                 flags |= CHANNEL_FLAG_FIRST
             if offset + len(chunk) >= totalLen:
                 flags |= CHANNEL_FLAG_LAST
-            header = struct.pack('<II', totalLen, flags)
+            header = pack('<II', totalLen, flags)
             self._transport.send(String(header + chunk))
             offset += len(chunk)
 
@@ -742,7 +737,7 @@ class _UploadProgress(object):
     def _checkFinished(self):
         if not self.finished and self.doneBytes() >= self.total:
             self.finished = True
-            log.info("clipboard: %d item(s) sent to the server (%.1f MB)" %
+            log.info(u'clipboard: %d item(s) sent to the server (%.1f MB)' %
                      (len(self.fileList.entries), self.total / 1048576.0))
             self.layer._notify('onFileTransferFinished', 'upload', self.paths(), self.total, 'completed')
 

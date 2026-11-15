@@ -1,13 +1,15 @@
 [build-system]
 # The Cython decoders use typed memoryviews only (no NumPy C API): NumPy is a runtime
-# dependency, not a build one, so iOS / Android cross builds need no NumPy for the target.
+# dependency, not a build one, so iOS / Android cross builds need no NumPy for the target
+# (PyPI has no iOS / Android NumPy wheels; Flet's index https://pypi.flet.dev has them for
+# CPython 3.12 - 3.14 only, none for 3.15 yet).
 # setuptools >= 77: SPDX license expression + license-files (PEP 639), built-in bdist_wheel.
-requires = ["setuptools>=77", "Cython>=3.0"]
+requires = ["setuptools", "Cython>=3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "rdpymanyqt"
-version = "3.1.3"
+version = "3.7.0"
 description = "RdpyManyQt: pure-Python Remote Desktop (RDP) client for every Qt binding (fork of rdpyqt)"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -30,12 +32,12 @@ dependencies = [
     "pycryptodome",
     "Pillow",
     "ManyQt",
-    "qt-reactor",
     "numpy",
     # cryptography >= 49 publishes no Intel macOS wheels: without this pip downloads the
-    # source archive and needs Rust + OpenSSL. 48.x is the last release with a universal2
+    # source archive and needs Rust + OpenSSL. 48.x is the last release with an universal2
     # wheel (pip then picks a pyOpenSSL that accepts it).
     "cryptography<49; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "pywin32; sys_platform == 'win32'"
 ]
 
 [project.urls]
@@ -43,10 +45,19 @@ homepage = "https://github.com/Usama01TN/RdpyManyQt"
 upstream = "https://github.com/nakagami/rdpyqt"
 
 [project.optional-dependencies]
+# WebAuthn redirection (MS-RDPEWA): FIDO2 security keys over USB HID
+webauthn = ["fido2"]
 h264 = ["av"]
+# serial port redirection (FreeRDP /serial)
+serial = ["pyserial"]
+# smart card redirection (FreeRDP /smartcard): PC/SC through pyscard
+smartcard = ["pyscard"]
+# USB redirection (FreeRDP /usb): libusb through python-libusb1
+usb = ["libusb1"]
 
 [project.scripts]
 rdpyqt = "rdpy.scripts.rdpyqt:main"
+rdplogincheck = "rdpy.scripts.rdplogincheck:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -62,9 +73,9 @@ include = ["rdpy*"]
 # mobile support)
 build = ["cp*"]
 skip = [
-    "*t-*",               # free-threaded builds: the decoders rely on the GIL
-    "*-manylinux_i686",   # no NumPy / cryptography wheels for 32-bit Linux:
-    "*-musllinux_i686",   #   the wheel could not be installed without compilers
+    "*t-*", # free-threaded builds: the decoders rely on the GIL
+    "*-manylinux_i686", # no NumPy / cryptography wheels for 32-bit Linux:
+    "*-musllinux_i686", #   the wheel could not be installed without compilers
 ]
 build-frontend = "build"
 test-command = "python {project}/tools/check_wheel.py"
@@ -72,9 +83,8 @@ test-command = "python {project}/tools/check_wheel.py"
 # Windows ARM64 (> 46.0.3): install the newest release that has a wheel instead of
 # compiling it (Rust + OpenSSL); pip then picks a pyOpenSSL / service-identity that accept it
 test-environment = { PIP_ONLY_BINARY = "cryptography" }
-# mobile wheels can not run on the build machine (and NumPy / cryptography publish no
-# iOS / Android wheels to test them with)
-test-skip = ["*-android_*", "*-ios_*"]
+# iOS / Android wheels are tested in the simulator / emulator below: tools/cibw.py skips the
+# tests of the Python versions whose dependencies have no wheel on the mobile index yet
 
 [tool.cibuildwheel.linux]
 archs = ["native"]
@@ -94,6 +104,19 @@ archs = ["auto"]
 archs = ["arm64_iphoneos", "arm64_iphonesimulator", "x86_64_iphonesimulator"]
 # the build needs no external tool (no cmake / ninja / rustc): only a C compiler and Cython
 xbuild-tools = []
+# the simulator of the build machine's architecture runs the self test (the project folder
+# is not visible there, so the checks are in the package). PyPI has no iOS wheels of NumPy,
+# PyAV or cryptography: they come from Flet's index of iOS / Android wheels; tools/cibw.py
+# checks per Python version what it has, installs PyAV when it exists and skips the tests
+# it can not satisfy (Flet: CPython 3.12 - 3.14 today)
+test-command = "python -m rdpy.selftest"
+test-environment = { PIP_EXTRA_INDEX_URL = "https://pypi.flet.dev" }
 
 [tool.cibuildwheel.android]
 archs = ["arm64_v8a", "x86_64"]
+# the emulator of the build machine's architecture runs the self test, with NumPy / PyAV /
+# cryptography from Flet's index like iOS (the Android test requirements are installed
+# with the build environment: the index is set there; it has no build tool, so the build
+# itself still takes setuptools and Cython from PyPI)
+test-command = "python -m rdpy.selftest"
+environment = { PIP_EXTRA_INDEX_URL = "https://pypi.flet.dev" }

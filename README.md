@@ -2,7 +2,7 @@
 
 ![RdpyManyQt](branding/banner.png)
 
-## Project description
+## Project description:
 
 Microsoft RDP client built with Python, [Twisted](https://twisted.org/)
 and [ManyQt](https://github.com/Usama01TN/ManyQt).
@@ -23,6 +23,26 @@ To use the H.264 decoding feature, please install it as follows.
 ```sh
 pip install "rdpymanyqt[h264]"
 ```
+
+Serial port, smart card and USB redirection need optional packages:
+
+```sh
+pip install "rdpymanyqt[serial]"      # pyserial
+pip install "rdpymanyqt[smartcard]"   # pyscard (+ the PC/SC service: pcscd on Linux)
+pip install "rdpymanyqt[usb]"         # python-libusb1 (+ libusb: bundled on Windows, the libusb-1.0
+                                      # package on Linux, brew install libusb on macOS)
+```
+
+On iOS and Android, PyPI has no wheels of NumPy, PyAV or cryptography: add Flet's package
+index, which has them (and PyAV for H.264) for CPython 3.12 - 3.14:
+
+```sh
+pip install --extra-index-url https://pypi.flet.dev "rdpymanyqt[h264]"
+```
+
+(with Briefcase or another app packager, set `PIP_EXTRA_INDEX_URL=https://pypi.flet.dev`).
+`python -m rdpy.selftest` checks an installation: compiled decoders, NumPy, PyAV when present
+and the device redirection modules.
 
 ### Smooth video and sound:
 
@@ -54,8 +74,18 @@ audio stay responsive. Set `RDPY_GFX_THREAD=0` to decode on the network thread i
 | Android                       | arm64-v8a, x86-64                 | versions with Android support (3.13 - 3.15)  |
 
 plus a pure-Python wheel (`py3-none-any`, any platform) and the source archive. Every desktop
-wheel is installed and checked (`tools/check_wheel.py`) before it is kept. The decoders need
-Cython and a C compiler to build, not NumPy (NumPy is only a runtime dependency).
+wheel is installed and checked (`tools/check_wheel.py`, i.e. `python -m rdpy.selftest`) before
+it is kept. The decoders need Cython and a C compiler to build, not NumPy (NumPy is only a
+runtime dependency).
+
+iOS and Android wheels are tested too, in the iOS simulator and the Android emulator of the
+runner's architecture (arm64 simulator, x86-64 emulator), with their dependencies from
+[Flet's index](https://pypi.flet.dev). Before building, `tools/cibw.py` asks pip what that index
+has for each Python version: NumPy (required) and PyAV (optional, H.264) are installed where
+they exist, and the tests of the other versions are skipped (today 3.15, whose wheels are still
+built) - they start automatically once the index publishes them. A simulator or emulator that
+fails does not lose the wheels: they are built again without tests and the run shows a warning.
+`RDPY_MOBILE_TESTS=required` makes a failed mobile test fail the build, `off` skips them.
 
 Every push to `main` / `master` (and every tag `v*`, or a manual run of the workflow)
 publishes the GitHub release **v&lt;version&gt;** (`version` in `pyproject.toml`) with every
@@ -75,7 +105,8 @@ to mirrors of GitHub release files, checksums verified) and restarts a run that 
 network error. The release job retries its GitHub calls the same way.
 
 The mobile wheels are libraries for app packagers (Briefcase, pyside6-android-deploy);
-running the client on a phone also needs Qt and the other dependencies built for it.
+running the client on a phone also needs a Qt binding built for it (the other dependencies
+come from PyPI and Flet's index).
 
 32-bit Windows and Windows ARM64: recent cryptography releases (needed by pyOpenSSL) publish
 no wheels there, so install with `pip install --only-binary cryptography rdpymanyqt` to get
@@ -103,6 +134,12 @@ rdpyqt [options] ip[:port]
 | `--swap-alt-meta`     | Swap Alt and Meta (Windows/Super/Command) keys                        | (disabled)         |
 | `--disable-avc444`    | Disable AVC444/AVC444v2 and use AVC420 only                           | (disabled)         |
 | `--drive [NAME=]PATH` | Redirect a local directory to the server as a drive (can be repeated) | (none)             |
+| `--printer SPEC`      | Redirect a printer (can be repeated, see *Device redirection*)        | (none)             |
+| `--serial NAME=PATH`  | Redirect a serial port (can be repeated)                              | (none)             |
+| `--parallel NAME=PATH`| Redirect a parallel port (can be repeated)                            | (none)             |
+| `--smartcard`         | Redirect the local smart card readers                                 | (disabled)         |
+| `--usb SPEC`          | Redirect a USB device (can be repeated, see *USB redirection*)        | (none)             |
+| `--app PROGRAM`       | RemoteApp: run one program, its windows as local windows              | (desktop)          |
 
 #### `-kt` Keyboard Type values:
 
@@ -161,6 +198,11 @@ rdpyqt -u user -p password -w 1920 -h 1080 rdp_server:3389
 | `--connect-timeout MS`             | Give up when the connection (TCP connect and RDP connection sequence) is not established in time                                               | `15000`  |
 | `--timeout MS`                     | Drop a connection whose data is not acknowledged in time (FreeRDP `/timeout`); TCP keep-alive (5 s, every 2 s, 3 probes) detects a dead server | `9000`   |
 | `--shell COMMAND`, `--workdir DIR` | Start a program instead of the desktop (the server policy must allow it)                                                                       |          |
+| `--no-dynamic-resolution`          | Resizing the window reconnects with the new size instead of using the display control channel (`--dynamic-resolution` turns it back on)        | dynamic  |
+| `--scale-desktop PERCENT`          | Remote desktop scale factor, 100 - 500 (FreeRDP `/scale-desktop`)                                                                              | `100`    |
+| `--scale-device 100\|140\|180`      | Remote device scale factor (FreeRDP `/scale-device`)                                                                                           | `100`    |
+| `--app-cmd ARGS`, `--app-workdir DIR`, `--app-hidef on\|off` | Command line, working folder and Enhanced RemoteApp of `--app` (see *RemoteApp*)                                    |          |
+| `--usb-list`                       | List the local USB devices (bus, address, ids) and exit                                                                                        |          |
 
 ### Security:
 
@@ -197,6 +239,8 @@ getter / slot setter:
 | Connection | `host`, `port`, `username`, `password`, `domain`, `clientName`, `desktopWidth`, `desktopHeight`, `connectTimeout`, `ackTimeout`, `autoConnect`, `shell`, `workingDirectory` |
 | Display    | `colorDepth` (*ColorDepth*), `graphicsPipeline`, `avc444`                                                                                                                   |
 | Devices    | `clipboardMode` (*ClipboardMode*), `soundEnabled`, `microphoneEnabled`, `audioLatency`, `drives` (`'NAME=PATH'` list; also `addDrive()`, `removeDrive()`, `clearDrives()`)  |
+| Redirection| `printers` (`--printer` descriptions; `addPrinter()`, `clearPrinters()`), `serialPorts`, `parallelPorts` (`'NAME=PATH'`; `addSerialPort()`, `addParallelPort()`, `clearPorts()`), `smartcardEnabled`, `smartcardFilter`, `usbDevices` (`--usb` descriptions; `addUsbDevice()`) |
+| Session    | `dynamicResolution` (the remote resolution follows the widget, off by default), `remoteApp`, `remoteAppArguments`, `remoteAppWorkingDirectory` (RemoteApp: the program's windows are shown as separate windows) |
 | Keyboard   | `keyboardLayout` (*KeyboardLayout*), `keyboardType` (*KeyboardType*), `swapAltMeta`                                                                                         |
 | Security   | `nlaSecurity`, `tlsSecurity`, `rdpSecurity`, `certificateMode` (*CertificateMode*), `securityPreset` (*SecurityPreset*)                                                     |
 
@@ -212,8 +256,8 @@ Methods: `connectToHost()`, `disconnectFromHost()`, `getState()`, `isConnected()
 `sendFiles(paths)`, `getCertificateRejection()`, `trustCertificate()`, `getLastError()`.
 
 Signals: `connected`, `disconnected(reason)`, `connectionFailed(reason)`, `stateChanged(State)`,
-`loginScreenReached`, `desktopReached`, `logonFailed(message)`, and the file transfer signals
-below.
+`loginScreenReached`, `desktopReached`, `logonFailed(message)`, the file transfer signals
+below, `printJob(printer, title, bytes, destination, error)` and `remoteAppFailed(reason)`.
 
 ```python
 from rdpy.ui.rdpviewer import RdpViewerWidget, ensureQtReactor
@@ -259,6 +303,7 @@ reported (direction *upload* = local files going to the server, *download* = fil
 | Clipboard transfer progress      | `onFileTransferProgress(direction, doneBytes, totalBytes)` | `fileTransferProgress`                       |                           |
 | Clipboard transfer finished      | `onFileTransferFinished(direction, paths, bytes, status)`  | `fileTransferFinished`                       | `--on-transfer-done CMD`  |
 | Shared-drive file read / written | `onDriveFileTransferred(direction, path, bytes)`           | `driveFileTransferred`                       | `--on-transfer-done CMD`  |
+| Document printed (or failed)     | `onPrintJob(printer, title, bytes, destination, error)`    | `printJob`                                   | `--on-print CMD`          |
 
 `status` is *completed*, *partial* (the paste stopped before the end) or *cancelled*. Uploads
 finish when the server has read every byte of the pasted files; downloads when every file is
@@ -266,6 +311,9 @@ saved locally (the paths of the local copies are given). Hooks receive `RDP_TRAN
 (clipboard / drive), `RDP_TRANSFER_DIRECTION`, `RDP_TRANSFER_ITEMS`, `RDP_TRANSFER_BYTES`,
 `RDP_TRANSFER_PATHS` (separated by the system path separator) and `RDP_TRANSFER_STATUS`. In
 RdpViewerWidget, direction and status are `TransferDirection` / `TransferStatus` values.
+`--on-print` hooks receive `RDP_PRINT_PRINTER`, `RDP_PRINT_TITLE`, `RDP_PRINT_BYTES`,
+`RDP_PRINT_DESTINATION` (CUPS job, file...), `RDP_PRINT_STATUS` (*printed* / *failed*) and
+`RDP_PRINT_ERROR`.
 
 ### Smart sizing:
 
@@ -273,8 +321,9 @@ The remote desktop is always centred in the widget. Without smart sizing it is s
 margins when the widget is larger than the remote resolution; in `rdpyqt` resizing the window
 reconnects with the new size, which then fills it).
 
-By default, resizing the window reconnects with the new size (the remote resolution follows
-the window). With **smart sizing** (as mstsc's *Smart sizing* and FreeRDP's `/smart-sizing`)
+By default the remote resolution follows the window: when the server offers the display
+control channel it changes without reconnecting (see *Dynamic resolution*), otherwise resizing
+the window reconnects with the new size. With **smart sizing** (as mstsc's *Smart sizing* and FreeRDP's `/smart-sizing`)
 the remote desktop keeps its resolution and is scaled to cover the whole window instead (no
 black bars, as mstsc and FreeRDP), with no reconnection; the mouse is mapped back to remote
 coordinates. `--keep-aspect` / *Keep aspect ratio* letterboxes with black bars instead.
@@ -362,7 +411,8 @@ Text and files are shared in both directions through the clipboard ([MS-RDPECLIP
 
 ### Drive redirection:
 
-The `rdpdr` device redirection channel ([MS-RDPEFS]) is supported for drives.
+The `rdpdr` device redirection channel ([MS-RDPEFS]) shares drives, printers, serial and
+parallel ports and smart cards.
 Each `--drive` option shares a local directory with the remote session, where it
 appears in Explorer as *NAME on HOSTNAME* (`\\tsclient\NAME`).
 When `NAME` is omitted the directory name is used.
@@ -378,7 +428,130 @@ enforced between the handles of the session; a conflicting lock request fails at
 instead of waiting. A drive whose directory is no longer available when reconnecting
 is skipped with a warning.
 
-Printer, serial/parallel port and smart card redirection are not implemented.
+### Device redirection: printers, serial / parallel ports, smart cards:
+
+The other `rdpdr` devices follow FreeRDP's channels (`printer`, `serial`, `parallel`,
+`smartcard`) and their `/printer`, `/serial`, `/parallel` and `/smartcard` options:
+
+| Option                                       | Effect                                                                                                                                  |
+|----------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| `--printer NAME[,DRIVER][,default]`          | Redirect the local printer `NAME` (CUPS queue on Linux / macOS / BSD, printer of the Windows spooler); `default` makes it the session's default printer |
+| `--printer '*'`, `--printers`                | Redirect every local printer (the local default stays the default)                                                                      |
+| `--printer file:FOLDER[,DRIVER]`             | A printer that saves each document in `FOLDER` (a PDF file with the default driver)                                                    |
+| `--serial NAME=PATH[,DRIVER][,permissive]`   | Redirect a serial port: `COM1=/dev/ttyUSB0`, `COM2=COM5`, or a pyserial URL (`COM3=socket://host:7000`, `rfc2217://...`)               |
+| `--parallel NAME=PATH`                       | Redirect a parallel port: `LPT1=/dev/usb/lp0` (a file or FIFO also works)                                                              |
+| `--smartcard`, `--smartcard-filter TEXT`     | Redirect the local smart card readers (only those whose name contains `TEXT`)                                                          |
+
+```sh
+rdpyqt -u user -p password --printers --printer file:~/RDP-prints \
+       --serial COM1=/dev/ttyUSB0 --smartcard rdp_server
+```
+
+**Printers** ([MS-RDPEPC]): the server installs each printer with the Windows driver named
+by `DRIVER` and renders the documents with it; the client receives the result and gives it to
+the local printing system. The default driver, *MS Publisher Imagesetter*, produces PostScript,
+which CUPS converts for any printer (on macOS 14 and later, whose CUPS no longer converts
+PostScript, and for `file:` printers the default is *Microsoft Print to PDF*). On Windows the
+local printer's own driver is announced and the data is sent raw to the spooler. The printer
+configuration the server stores (paper, trays...) is kept in `~/.config/rdpymanyqt/printers`
+(`%APPDATA%\rdpymanyqt\printers`) and sent back at the next connection. Documents are
+spooled to a temporary file (at most 2 GB) and printed when the server closes them; a
+document the server abandons is discarded. Observers get `onPrintJob()` for each document.
+
+**Serial ports** ([MS-RDPESP]): Windows applications see a COM port driven by `Serial.sys`;
+its requests are emulated on top of pyserial: baud rate, line control, flow control
+(RTS/CTS, DTR/DSR, XON/XOFF), modem lines, break, the Windows read / write timeouts
+(`COMMTIMEOUTS`, including the interval and "return immediately" modes), `WaitCommEvent`
+masks, purge, status and statistics. Reads, writes and waits run on their own threads, so a
+pending read never blocks the other requests, and they are cancelled when the port is closed
+or purged. `DRIVER` (`Serial`, `SerCx`, `SerCx2`) is accepted for FreeRDP compatibility;
+`permissive` reports unsupported requests as successful.
+
+**Parallel ports** ([MS-RDPESP]): what applications write to `LPTn` goes to the local device.
+
+**Smart cards** ([MS-RDPESC]): the WinSCard calls of the session (smart card logon,
+certificates, PIV / PKCS#11 middleware) run on the local readers through PC/SC: pcsc-lite on
+Linux and BSD, the PCSC framework on macOS, WinSCard on Windows. As in FreeRDP (winpr), the
+pcsc-lite differences are converted (protocols, card states, error and control codes), and
+the calls PC/SC lacks are emulated (card cache, transmit count, reader names as attributes,
+device type). Each context has its own threads, `SCardGetStatusChange` waits on its own PC/SC
+context so it never delays the other calls, and like Windows a transaction left idle for
+5 seconds is ended with a card reset (`RDPY_SCARD_TRANSACTION_TIMEOUT_MS`, 0 to disable).
+
+The session report (`--info`, `getSessionInfo()`) lists the redirected printers, ports and
+smart cards.
+
+### Dynamic resolution:
+
+With the display control channel ([MS-RDPEDISP], FreeRDP `/dynamic-resolution`), resizing the
+`rdpyqt` window changes the resolution of the session without reconnecting: the client sends
+the new monitor layout (even width, 200 - 8192 pixels, within the server's largest area, at most
+one every 500 ms, the last size wins) and the server switches with an RDPGFX ResetGraphics or,
+without the graphics pipeline, a deactivation-reactivation sequence. Servers that do not open
+the channel (Windows 7 and older, xrdp...) keep the reconnection. When the channel opens and the
+window changed size while connecting, the session takes the window size at once.
+
+- `rdpyqt`: on by default, `--no-dynamic-resolution` to reconnect instead; `--scale-desktop` /
+  `--scale-device` set the scale factors sent with the layouts (and at connection time).
+- RdpViewerWidget: `dynamicResolution` property (off by default: the remote resolution stays
+  `desktopWidth` x `desktopHeight`).
+- Controller: `setDynamicResolution()`, `isDynamicResolutionActive()`,
+  `requestDesktopSize(width, height)`, `setScaleFactors()`; observers get
+  `onDynamicResolutionReady()` and `onDesktopResize(width, height)`.
+
+### RemoteApp:
+
+With `--app` (FreeRDP `/app`, [MS-RDPERP]) the server runs one program instead of the desktop
+and each of its windows becomes a local window: menus, dialogs, tool windows and notification
+area icons included, with their titles and icons, in the task bar.
+
+```sh
+rdpyqt -u user -p password --app '||notepad' server                     # published RemoteApp alias
+rdpyqt -u user -p password --app 'C:\Windows\System32\notepad.exe' --app-cmd 'C:\notes.txt' server
+rdpyqt -u user -p password --app 'program:||calc,workdir:C:\temp' server  # FreeRDP syntax
+```
+
+The program must be published as a RemoteApp on the server (`||alias`), or the server must
+allow unlisted programs; otherwise the server refuses it and the reason is shown. The session
+desktop covers the local screens; the windows are cut out of it at their place, their title bar
+and borders are drawn by the server, so moving, resizing, maximizing and closing them work with
+the mouse as on Windows (the server drags the windows with their content). Closing or
+minimizing a window from the task bar asks the program; the session ends when the program
+exits. `--app-hidef on` asks for Enhanced RemoteApp, where windows may get their own graphics
+pipeline surfaces. On Wayland, where applications can not place their windows, the windows are
+shown where the compositor puts them.
+
+RdpViewerWidget: `remoteApp`, `remoteAppArguments`, `remoteAppWorkingDirectory` properties
+(the widget shows a placeholder, the program's windows are separate windows) and the
+`remoteAppFailed(reason)` signal. Controller: `setRemoteApp(app)` (`rail.RemoteApp` or a
+FreeRDP `/app` description), `getRailLayer()` for window commands, observers get
+`onRailEvent(kind, ...)`; `rdpy.ui.rail_qt.RailManager` draws the windows.
+
+### USB redirection:
+
+`--usb` (FreeRDP `/usb`, [MS-RDPEUSB]) hands local USB devices to the server, where their
+Windows drivers run: control, bulk, interrupt and isochronous transfers, configuration and
+interface selection, Microsoft OS descriptors, stall recovery, cancellation. While redirected
+the device is taken from the local drivers; it is given back when the session ends, when the
+server lets it go, and when it is unplugged.
+
+| `--usb` value                       | Devices                                                                    |
+|-------------------------------------|----------------------------------------------------------------------------|
+| `VVVV:PPPP`, `id:VVVV:PPPP[#...]`   | by vendor and product id (hexadecimal, as `lsusb` prints them)            |
+| `addr:BUS:ADDRESS[#...]`            | by bus and device number (decimal as `lsusb` prints them, hex accepted)   |
+| `auto`                              | the devices plugged in while connected (hubs excepted)                    |
+
+```sh
+pip install "rdpymanyqt[usb]"     # python-libusb1
+rdpyqt --usb-list
+rdpyqt -u user -p password --usb 0781:5567 --usb addr:1:7 server
+```
+
+Access rights: on Linux the user needs write access to the device (a udev rule such as
+`SUBSYSTEM=="usb", ATTR{idVendor}=="0781", MODE="0660", GROUP="plugdev"`, or root); on Windows
+the device needs the WinUSB driver (Zadig); on macOS some classes stay with the system (mass
+storage, keyboards and mice). RdpViewerWidget: `usbDevices` property; controller:
+`addUsbDevice(spec)` (or a `urbdrc.UsbDeviceBackend`); the session report lists the devices.
 
 ### Project lineage and credits:
 
@@ -403,3 +576,29 @@ like to support development further:
 - **Ko-fi (Buy me a coffee for extra energy):** [ko-fi.com/usamatn](https://ko-fi.com/usamatn)
 
 Thank you so much <3 :)
+
+### FreeRDP channels
+
+All the virtual channels are in `rdpy/protocol/rdp/channels/` (one module per channel, like
+FreeRDP's `channels/` folder); import them as `rdpy.protocol.rdp.channels.<name>`. The names
+used before 3.7.0 (`rdpy.protocol.rdp.<name>`) still import the same modules.
+
+Ported from FreeRDP's `channels/` (client side):
+
+| Channel | Option | RdpViewerWidget | What it does |
+|---|---|---|---|
+| `ainput` (FreeRDP::Advanced::Input) | on by default, `--no-advanced-input` | `advancedInput` | FreeRDP based servers open it: mouse and wheel events then use it (32-bit coordinates, relative moves, high resolution wheel) |
+| `sshagent` (SSHAGENT) | `--ssh-agent` | `sshAgent` | programs in the session use the local ssh-agent (SSH_AUTH_SOCK, or the Windows OpenSSH agent pipe); keys never leave this computer |
+| `rdpecam` (MS-RDPECAM) | `--camera`, `--camera-device NAME`, `--camera-test` | `cameraRedirection`, `cameraDevice` | the cameras of this computer appear in the session (Windows); H.264 with PyAV, MJPEG otherwise |
+| `rdpei` (MS-RDPEI) | `--multitouch` | `multitouch` | touch screens (up to 64 fingers) and pens (pressure, rotation, tilt, eraser) as real touch and pen input in Windows |
+| `location` (MS-RDPEL) | `--location LAT,LON[,ALT]`, `--location auto` (Qt Positioning) | `location` | the session's location services get this position |
+| `echo` (MS-RDPEECO) | `--echo` | `echoChannel` | answers the server's round-trip measurements |
+| `rdp2tcp` | `--rdp2tcp COMMAND` | `rdp2tcpCommand` | TCP forwarding through the RDP connection with the [rdp2tcp](https://github.com/V-E-O/rdp2tcp) tool (rdp2tcp.exe runs in the session) |
+| `video` + `geometry` (MS-RDPEVOR, MS-RDPEGT) | `--video` (`--geometry` alone) | `videoRedirection` | videos playing in the session come as H.264 and are drawn where they play, instead of being re-encoded as desktop updates |
+| `encomsp` (MS-RDPEMSC) | `--encomsp` (on with `--assistance`), `--no-request-control` | `requestRemoteControl()` | Remote Assistance: requests the control of the novice's desktop; Shift + right-click > *Request control* / *View only* |
+| `tsmf` (MS-RDPEV) | `--multimedia` | `multimediaRedirection` | Windows Media Player playback (WMV / VC-1, H.264, MPEG-2, WMA, MP3, AAC, AC-3) is sent compressed and decoded here (PyAV); the video is drawn where the player is, the audio plays on this computer's speakers |
+| `rdpewa` (MS-RDPEWA) | `--webauthn` | `webAuthn` | passkey / security key sign-ins in the session (browsers, Windows Hello for Business) use the FIDO2 key plugged into this computer; its PIN is asked in a dialog. Needs `pip install fido2` (or `pip install .[webauthn]`); on Windows raw security key access needs administrator rights, on Linux access to the hidraw device |
+| `remdesk` (Remote Assistance) | `--assistance FILE --assistance-password PASS` | `setRemoteAssistance(file, password)` | connect as the expert of a Windows Remote Assistance invitation (.msrcincident); the address comes from the invitation |
+
+Remote Assistance: `remdesk` authenticates the expert, `encomsp` requests the control.
+

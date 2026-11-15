@@ -17,12 +17,9 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 Low latency PCM playback for the RDPSND channel.
-
 Three parts:
-
 * _PcmRing: thread safe jitter buffer with a latency target. It starts
   playing once enough audio is buffered, drops the oldest audio when the
   buffer grows past the target (so sound never drifts behind the video)
@@ -35,11 +32,12 @@ Three parts:
   binding ManyQt supports (PyQt5, PyQt6, PySide2, PySide6).
 """
 from __future__ import absolute_import, division, print_function
-import collections
-import threading
-import numpy as np
+from numpy import arange, ascontiguousarray, clip, concatenate, dtype as np_dtype, float32, float64, floor, \
+    frombuffer, int64, linspace, minimum, repeat, uint8, zeros
+from collections import deque
+from threading import Lock
 from rdpy.core.compat import monotonic
-import rdpy.core.log as log
+from rdpy.core import log
 
 # Fade length (frames) used around underruns / dropped audio: ~3 ms at 44.1 kHz
 _FADE_FRAMES = 128
@@ -49,18 +47,19 @@ _TARGET_MAX = 0.35
 # Device buffer requested from Qt (seconds)
 _DEVICE_BUFFER_QT6 = 0.06
 _DEVICE_BUFFER_QT5 = 0.10
-
 # Output sample kinds: numpy dtype and bytes per sample
 _KINDS = {
-    'u8': (np.uint8, 1),
-    's16': (np.dtype('<i2'), 2),
-    's32': (np.dtype('<i4'), 4),
-    'f32': (np.dtype('<f4'), 4),
+    'u8': (uint8, 1),
+    's16': (np_dtype('<i2'), 2),
+    's32': (np_dtype('<i4'), 4),
+    'f32': (np_dtype('<f4'), 4),
 }
 
 
 class PcmFormat(object):
-    """Raw PCM layout: rate (Hz), channels and sample kind (see _KINDS)."""
+    """
+    Raw PCM layout: rate (Hz), channels and sample kind (see _KINDS).
+    """
 
     __slots__ = ('rate', 'channels', 'kind')
 
@@ -89,30 +88,30 @@ class PcmFormat(object):
         return not self.__eq__(other)
 
     def __repr__(self):
-        return "PcmFormat(%d Hz, %d ch, %s)" % (self.rate, self.channels, self.kind)
+        return u'PcmFormat(%d Hz, %d ch, %s)' % (self.rate, self.channels, self.kind)
 
 
 def _toFloat(data, fmt):
     """bytes in *fmt* -> float32 array (frames, channels) in [-1, 1]."""
     dtype = _KINDS[fmt.kind][0]
-    a = np.frombuffer(data, dtype=dtype, count=len(data) // fmt.sampleBytes)
+    a = frombuffer(data, dtype=dtype, count=len(data) // fmt.sampleBytes)
     if fmt.kind == 'u8':
-        f = (a.astype(np.float32) - 128.0) * (1.0 / 128.0)
+        f = (a.astype(float32) - 128.0) * (1.0 / 128.0)
     elif fmt.kind == 's16':
-        f = a.astype(np.float32) * (1.0 / 32768.0)
+        f = a.astype(float32) * (1.0 / 32768.0)
     elif fmt.kind == 's32':
-        f = a.astype(np.float32) * (1.0 / 2147483648.0)
+        f = a.astype(float32) * (1.0 / 2147483648.0)
     else:
-        f = a.astype(np.float32)
+        f = a.astype(float32)
     frames = len(f) // fmt.channels
     return f[:frames * fmt.channels].reshape(frames, fmt.channels)
 
 
 def _fromFloat(f, kind):
     """float32 array -> bytes of the given sample kind."""
-    np.clip(f, -1.0, 1.0, out=f)
+    clip(f, -1.0, 1.0, out=f)
     if kind == 'u8':
-        return (f * 127.0 + 128.0).astype(np.uint8).tobytes()
+        return (f * 127.0 + 128.0).astype(uint8).tobytes()
     if kind == 's16':
         return (f * 32767.0).astype('<i2').tobytes()
     if kind == 's32':
@@ -136,7 +135,7 @@ class PcmConverter(object):
         self.dst = dst
         self.identity = (src == dst)
         self._ratio = float(src.rate) / float(dst.rate)
-        self._prev = np.zeros((1, dst.channels), dtype=np.float32)
+        self._prev = zeros((1, dst.channels), dtype=float32)
         self._t = 1.0  # read position in [prev, chunk...] coordinates
         self._partial = b''  # trailing bytes of an incomplete input frame
 
@@ -158,29 +157,29 @@ class PcmConverter(object):
             if self.dst.channels == 1:
                 f = f.mean(axis=1, keepdims=True)
             elif f.shape[1] == 1:
-                f = np.repeat(f, self.dst.channels, axis=1)
+                f = repeat(f, self.dst.channels, axis=1)
             else:
-                out = np.zeros((f.shape[0], self.dst.channels), dtype=np.float32)
+                out = zeros((f.shape[0], self.dst.channels), dtype=float32)
                 n = min(f.shape[1], self.dst.channels)
                 out[:, :n] = f[:, :n]
                 f = out
         # rate
         if self.src.rate != self.dst.rate:
-            f = self._resample(np.ascontiguousarray(f, dtype=np.float32))
-        return _fromFloat(np.ascontiguousarray(f, dtype=np.float32), self.dst.kind)
+            f = self._resample(ascontiguousarray(f, dtype=float32))
+        return _fromFloat(ascontiguousarray(f, dtype=float32), self.dst.kind)
 
     def _resample(self, x):
         n = x.shape[0]
-        buf = np.concatenate((self._prev, x), axis=0)  # buf[0] = last frame of previous chunk
+        buf = concatenate((self._prev, x), axis=0)  # buf[0] = last frame of previous chunk
         if self._t > n:
             self._t -= n
             self._prev = x[-1:].copy()
-            return np.zeros((0, x.shape[1]), dtype=np.float32)
-        count = int(np.floor((n - self._t) / self._ratio)) + 1
-        t = self._t + np.arange(count, dtype=np.float64) * self._ratio
-        i0 = np.floor(t).astype(np.int64)
-        frac = (t - i0).astype(np.float32)[:, None]
-        i1 = np.minimum(i0 + 1, n)
+            return zeros((0, x.shape[1]), dtype=float32)
+        count = int(floor((n - self._t) / self._ratio)) + 1
+        t = self._t + arange(count, dtype=float64) * self._ratio
+        i0 = floor(t).astype(int64)
+        frac = (t - i0).astype(float32)[:, None]
+        i1 = minimum(i0 + 1, n)
         y = buf[i0] * (1.0 - frac) + buf[i1] * frac
         self._t = t[-1] + self._ratio - n
         self._prev = x[-1:].copy()
@@ -201,13 +200,13 @@ class _PcmRing(object):
     def __init__(self, fmt, clock=monotonic):
         self.fmt = fmt
         self._clock = clock
-        self._lock = threading.Lock()
+        self._lock = Lock()
         self._buf = bytearray()
         self._pos = 0
         self._primed = False
         self._fadeInNext = False
         self._lastWrite = 0.0
-        self._packets = collections.deque(maxlen=24)
+        self._packets = deque(maxlen=24)
         self._readChunk = 0.0  # largest chunk the device pulls at once (seconds)
         self.target = _TARGET_MIN
         self.dropped = 0  # bytes dropped to keep latency (stats)
@@ -312,12 +311,11 @@ def _fade(chunk, fmt, fadeIn):
     nbytes = frames * fmt.frameBytes
     start = 0 if fadeIn else len(chunk) - nbytes
     dtype = _KINDS[fmt.kind][0]
-    seg = np.frombuffer(chunk, dtype=dtype, count=nbytes // fmt.sampleBytes,
-                        offset=start).reshape(frames, fmt.channels)
-    gain = np.linspace(0.0, 1.0, frames, dtype=np.float32)
+    seg = frombuffer(chunk, dtype=dtype, count=nbytes // fmt.sampleBytes, offset=start).reshape(frames, fmt.channels)
+    gain = linspace(0.0, 1.0, frames, dtype=float32)
     if not fadeIn:
         gain = gain[::-1]
-    out = (seg.astype(np.float32) * gain[:, None]).astype(dtype)
+    out = (seg.astype(float32) * gain[:, None]).astype(dtype)
     chunk[start:start + nbytes] = out.tobytes()
 
 
@@ -344,14 +342,16 @@ def _slotDecorator():
 
 
 class _QtAudioApi(object):
-    """Hides the differences between the Qt5 and Qt6 audio classes."""
+    """
+    Hides the differences between the Qt5 and Qt6 audio classes.
+    """
 
     def __init__(self):
-        from ManyQt import QtMultimedia as M
-        self.M = M
-        self.qt6 = hasattr(M.QAudioFormat, 'setSampleFormat')
-        self.name = "Qt6 QAudioSink" if self.qt6 else "Qt5 QAudioOutput"
-        self.inputName = "Qt6 QAudioSource" if self.qt6 else "Qt5 QAudioInput"
+        from ManyQt import QtMultimedia
+        self.M = QtMultimedia
+        self.qt6 = hasattr(QtMultimedia.QAudioFormat, 'setSampleFormat')
+        self.name = u'Qt6 QAudioSink' if self.qt6 else u'Qt5 QAudioOutput'
+        self.inputName = u'Qt6 QAudioSource' if self.qt6 else u'Qt5 QAudioInput'
 
     def defaultDevice(self):
         M = self.M
@@ -371,15 +371,13 @@ class _QtAudioApi(object):
 
     def createSource(self, dev, qf):
         M = self.M
-        if self.qt6:
-            return M.QAudioSource(dev, qf)
-        return M.QAudioInput(dev, qf)
+        return M.QAudioSource(dev, qf) if self.qt6 else M.QAudioInput(dev, qf)
 
     def deviceName(self, dev):
         try:
             return dev.description() if self.qt6 else dev.deviceName()
-        except Exception:
-            return "?"
+        except:
+            return u'?'
 
     def makeFormat(self, pcm):
         M = self.M
@@ -390,7 +388,7 @@ class _QtAudioApi(object):
             name = {'u8': 'UInt8', 's16': 'Int16', 's32': 'Int32', 'f32': 'Float'}[pcm.kind]
             qf.setSampleFormat(_enum(M.QAudioFormat, 'SampleFormat', name))
         else:
-            qf.setCodec("audio/pcm")
+            qf.setCodec(u'audio/pcm')
             qf.setByteOrder(_enum(M.QAudioFormat, 'Endian', 'LittleEndian'))
             qf.setSampleSize(pcm.sampleBytes * 8)
             stype = {'u8': 'UnSignedInt', 's16': 'SignedInt', 's32': 'SignedInt', 'f32': 'Float'}[pcm.kind]
@@ -478,7 +476,7 @@ def _pullDevice():
                 try:
                     return self._ring.read(int(maxSize))
                 except Exception as e:  # never raise into Qt
-                    log.warning("audio: read error %s" % e)
+                    log.warning(u'audio: read error %s' % e)
                     return b'\x00' * int(maxSize)
 
             def writeData(self, data):
@@ -506,7 +504,7 @@ class AudioOutput(object):
     """
 
     _instance = None
-    _lock = threading.Lock()
+    _lock = Lock()
 
     @classmethod
     def instance(cls):
@@ -516,7 +514,7 @@ class AudioOutput(object):
                 try:
                     cls._instance = cls()
                 except Exception as e:
-                    log.warning("audio: playback disabled (%s)" % e)
+                    log.warning(u'audio: playback disabled (%s)' % e)
                     cls._instance = False
             return cls._instance or None
 
@@ -548,7 +546,7 @@ class AudioOutput(object):
                 token, src, onReady, dev = req
                 try:
                     if dev is None:
-                        log.warning("audio: no audio output device available")
+                        log.warning(u'audio: no audio output device available')
                         return
                     out = api.chooseFormat(dev, src)
                     qf = api.makeFormat(out)
@@ -564,11 +562,11 @@ class AudioOutput(object):
                     except Exception:
                         actual = bufSecs
                     self.sinks[token] = (sink, pull)
-                    log.info("audio: playing %s on '%s' via %s (server %s, device buffer %d ms)" %
+                    log.info(u'audio: playing %s on \'%s\' via %s (server %s, device buffer %d ms)' %
                              (out, api.deviceName(dev), api.name, src, int(actual * 1000)))
                     onReady(token, ring, PcmConverter(src, out), actual)
                 except Exception as e:
-                    log.warning("audio: cannot open the output device: %r" % (e,))
+                    log.warning(u'audio: cannot open the output device: %r' % (e,))
 
             @Slot(object)
             def _stop(self, token):
@@ -590,7 +588,7 @@ class AudioOutput(object):
                 token, dst, onData, dev = req
                 try:
                     if dev is None:
-                        log.warning("microphone: no audio input device available")
+                        log.warning(u'microphone: no audio input device available')
                         return
                     fmt = api.chooseFormat(dev, dst)
                     source = api.createSource(dev, api.makeFormat(fmt))
@@ -609,10 +607,10 @@ class AudioOutput(object):
 
                     io.readyRead.connect(readCaptured)
                     self.sinks[token] = (source, io)
-                    log.info("microphone: capturing %s from '%s' via %s" %
+                    log.info(u'microphone: capturing %s from \'%s\' via %s' %
                              (fmt, api.deviceName(dev), api.inputName))
                 except Exception as e:
-                    log.warning("microphone: cannot open the input device: %r" % (e,))
+                    log.warning(u'microphone: cannot open the input device: %r' % (e,))
 
             @Slot()
             def stopAll(self):
@@ -621,7 +619,7 @@ class AudioOutput(object):
 
         self._thread = QtCore.QThread()
         try:
-            self._thread.setObjectName("rdpsnd-audio")
+            self._thread.setObjectName(u'rdpsnd-audio')
         except Exception:
             pass
         self._worker = _Worker()
@@ -668,7 +666,7 @@ class AudioOutput(object):
             try:
                 dev = self._api.defaultDevice()
             except Exception as e:
-                log.warning("audio: cannot query the output device: %s" % e)
+                log.warning(u'audio: cannot query the output device: %s' % e)
                 dev = None
             self._worker.startRequested.emit((token, src, onReady, dev))
         return token
@@ -689,7 +687,7 @@ class AudioOutput(object):
             try:
                 dev = self._api.defaultInputDevice()
             except Exception as e:
-                log.warning("microphone: cannot query the input device: %s" % e)
+                log.warning(u'microphone: cannot query the input device: %s' % e)
                 dev = None
             self._worker.captureRequested.emit((token, dst, onData, dev))
         return token

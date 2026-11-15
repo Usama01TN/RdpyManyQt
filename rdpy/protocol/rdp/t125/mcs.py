@@ -18,26 +18,22 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 Implement Multi-Channel Service
-
 Each channel have a particular role.
 The main channel is the graphical channel.
-It exist channel for file system order, audio channel, clipboard etc...
+It exists channel for file system order, audio channel, clipboard etc...
 """
 from __future__ import absolute_import, division, print_function
-import binascii
-import time as _time
-from rdpy.core.compat import monotonic
-from rdpy.core.layer import LayerAutomata, IStreamSender, Layer
-from rdpy.core.type import sizeof, Stream, UInt8, UInt16Le, UInt32Le, String
+from binascii import hexlify
 from rdpy.core.error import InvalidExpectedDataException, InvalidValue, InvalidSize, CallPureVirtualFuntion
+from rdpy.core.type import sizeof, Stream, UInt8, UInt16Le, UInt32Le
+from rdpy.core.layer import LayerAutomata, IStreamSender, Layer
+from rdpy.security.rsa_wrapper import random
+from rdpy.core.compat import monotonic
 from .ber import writeLength
-import rdpy.core.log as log
-
 from . import ber, gcc, per
-import rdpy.security.rsa_wrapper as rsa
+from rdpy.core import log
 
 
 class Message(object):
@@ -80,14 +76,14 @@ class IGCCConfig(object):
         @return: {integer} mcs user id
         @see: mcs.IGCCConfig
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "getUserId", "IGCCConfig"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'getUserId', u'IGCCConfig'))
 
     def getChannelId(self):
         """
         @return: {integer} return channel id of proxy
         @see: mcs.IGCCConfig
         """
-        raise CallPureVirtualFuntion("%s:%s defined by interface %s" % (self.__class__, "getChannelId", "IGCCConfig"))
+        raise CallPureVirtualFuntion(u'%s:%s defined by interface %s' % (self.__class__, u'getChannelId', u'IGCCConfig'))
 
     def getGCCClientSettings(self):
         """
@@ -95,7 +91,7 @@ class IGCCConfig(object):
         @see: mcs.IGCCConfig
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "getGCCClientSettings", "IGCCConfig"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'getGCCClientSettings', u'IGCCConfig'))
 
     def getGCCServerSettings(self):
         """
@@ -103,7 +99,7 @@ class IGCCConfig(object):
         @see: mcs.IGCCConfig
         """
         raise CallPureVirtualFuntion(
-            "%s:%s defined by interface %s" % (self.__class__, "getGCCServerSettings", "IGCCConfig"))
+            u'%s:%s defined by interface %s' % (self.__class__, u'getGCCServerSettings', u'IGCCConfig'))
 
 
 class MCSLayer(LayerAutomata):
@@ -243,13 +239,13 @@ class MCSLayer(LayerAutomata):
         opcode = data.readUInt8()
 
         if self.readMCSPDUHeader(opcode, DomainMCSPDU.DISCONNECT_PROVIDER_ULTIMATUM):
-            log.info("MCS DISCONNECT_PROVIDER_ULTIMATUM")
+            log.info(u'MCS DISCONNECT_PROVIDER_ULTIMATUM')
             self._transport.close()
             return
 
         #client case
         elif not self.readMCSPDUHeader(opcode, self._receiveOpcode):
-            raise InvalidExpectedDataException("Invalid expected MCS opcode receive data")
+            raise InvalidExpectedDataException(u'Invalid expected MCS opcode receive data')
 
         #server user id
         per.readInteger16(data, Channel.MCS_USERCHANNEL_BASE)
@@ -267,7 +263,7 @@ class MCSLayer(LayerAutomata):
                 # Fallback: server sent on channelId=0 (messageChannelId was not negotiated)
                 self._handleAutoDetect(data)
             else:
-                log.error("receive data for an unconnected layer channelId=%d" % channelId)
+                log.error(u'receive data for an unconnected layer channelId=%d' % channelId)
             return
 
         layer = self._channels[channelId]
@@ -280,7 +276,7 @@ class MCSLayer(LayerAutomata):
             # A virtual channel (clipboard, sound, drives...) failing on one
             # PDU must not take the whole session down: the PDU is dropped,
             # as FreeRDP's channel plugins drop what they cannot process.
-            log.warning("channel %d (%s): PDU dropped after an error: %r" %
+            log.warning(u'channel %d (%s): PDU dropped after an error: %r' %
                         (channelId, layer.__class__.__name__, e))
 
         # SEC_AUTODETECT_REQ/RSP flags used in message channel PDUs
@@ -314,7 +310,7 @@ class MCSLayer(LayerAutomata):
         data.read(2)  # secFlagHi (unused)
 
         if not (secFlag & self._SEC_AUTODETECT_REQ):
-            log.debug("message channel: secFlag=0x%04x (not auto-detect)" % secFlag)
+            log.debug(u'message channel: secFlag=0x%04x (not auto-detect)' % secFlag)
             return
 
         data.read(2)  # headerLength + headerTypeId (unused)
@@ -347,10 +343,10 @@ class MCSLayer(LayerAutomata):
         return max(ms, 1)
 
     # Pre-built static portions of auto-detect responses
-    import struct as _struct
-    _AUTODETECT_RSP_PREFIX = _struct.pack('<HH', 0x2000, 0)  # SEC_AUTODETECT_RSP, 0
-    _RTT_RESP_HEADER = _struct.pack('BB', 6, 0x01)  # headerLength=6, typeId=1
-    _BW_RESP_HEADER = _struct.pack('BB', 14, 0x01)  # headerLength=14, typeId=1
+    from struct import pack
+    _AUTODETECT_RSP_PREFIX = pack('<HH', 0x2000, 0)  # SEC_AUTODETECT_RSP, 0
+    _RTT_RESP_HEADER = pack('BB', 6, 0x01)  # headerLength=6, typeId=1
+    _BW_RESP_HEADER = pack('BB', 14, 0x01)  # headerLength=14, typeId=1
 
     def _sendAutoDetectResponse(self, sequenceNumber, responseType,
                                 timeDelta=0, byteCount=0):
@@ -373,7 +369,7 @@ class MCSLayer(LayerAutomata):
         if include_bw:
             respBody += (UInt32Le(timeDelta), UInt32Le(byteCount))
 
-        log.debug("AutoDetect response: responseType=0x%04x seq=%d timeDelta=%d" %
+        log.debug(u'AutoDetect response: responseType=0x%04x seq=%d timeDelta=%d' %
                   (responseType, sequenceNumber, timeDelta))
         payload = (UInt16Le(self._SEC_AUTODETECT_RSP), UInt16Le(0)) + respBody
         self.send(self._messageChannelId, payload)
@@ -418,7 +414,7 @@ class MCSLayer(LayerAutomata):
         @return: {Tuple} (max_channels, max_users, max_tokens, max_pdu_size)
         """
         if not ber.readUniversalTag(s, ber.Tag.BER_TAG_SEQUENCE, True):
-            raise InvalidValue("bad BER tags")
+            raise InvalidValue(u'bad BER tags')
         ber.readLength(s)  #length
         max_channels = ber.readInteger(s)
         max_users = ber.readInteger(s)
@@ -476,11 +472,11 @@ class Client(MCSLayer):
         Send channel request or connect upper layer if all channels are connected
         Wait channel confirm
         """
-        log.debug("mcs Client.connectNextChannel()")
+        log.debug(u'mcs Client.connectNextChannel()')
         self.setNextState(self.recvChannelJoinConfirm)
         #global channel
         if not self._isGlobalChannelRequested:
-            log.debug("global channel")
+            log.debug(u'global channel')
             self.sendChannelJoinRequest(Channel.MCS_GLOBAL_CHANNEL)
             self._isGlobalChannelRequested = True
             return
@@ -521,40 +517,40 @@ class Client(MCSLayer):
         @param data: {Stream}
         """
         # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/d23f7725-876c-48d4-9e41-8288896a19d3
-        log.debug("Client.recvConnectResponse()")
+        log.debug(u'Client.recvConnectResponse()')
         ber.readApplicationTag(data, UInt8(Message.MCS_TYPE_CONNECT_RESPONSE))
         ber.readEnumerated(data)
         ber.readInteger(data)
         self.readDomainParams(data)
         if not ber.readUniversalTag(data, ber.Tag.BER_TAG_OCTET_STRING, False):
-            raise InvalidExpectedDataException("invalid expected BER tag")
+            raise InvalidExpectedDataException(u'invalid expected BER tag')
         gccRequestLength = ber.readLength(data)
         log.debug('Client.recvConnectResponse() gccRequestLength={!r}'.format(gccRequestLength))
         if data.dataLen() != gccRequestLength:
-            raise InvalidSize("bad size of GCC request")
+            raise InvalidSize(u'bad size of GCC request')
         self._serverSettings = gcc.readConferenceCreateResponse(data)
 
         # Log SC_NET response
         serverNet = self._serverSettings.getBlock(gcc.MessageType.SC_NET)
         if serverNet is not None:
             channelIds = [serverNet.channelIdArray[i].value for i in range(serverNet.channelCount.value)]
-            log.debug("SC_NET MCSChannelId=%d channelCount=%d channelIds=%s" %
+            log.debug(u'SC_NET MCSChannelId=%d channelCount=%d channelIds=%s' %
                       (serverNet.MCSChannelId.value, serverNet.channelCount.value, channelIds))
             for i, vc in enumerate(self._virtualChannels):
                 chName = vc[0].name.value.rstrip(b'\x00').decode('utf-8', errors='replace')
                 assignedId = channelIds[i] if i < len(channelIds) else 'N/A'
-                log.debug("  virtualChannel[%d] name=%s -> channelId=%s" % (i, chName, assignedId))
+                log.debug(u'  virtualChannel[%d] name=%s -> channelId=%s' % (i, chName, assignedId))
         else:
-            log.warning("SC_NET block not found in server response!")
+            log.warning(u'SC_NET block not found in server response!')
 
         # Extract message channel ID from SC_MCS_MSGCHANNEL if present
         serverMsgCh = self._serverSettings.getBlock(gcc.MessageType.SC_MCS_MSGCHANNEL)
         if serverMsgCh is not None:
             self._messageChannelId = serverMsgCh.mcsChannelId.value
-            log.debug("SC_MCS_MSGCHANNEL: messageChannelId=%d" % self._messageChannelId)
+            log.debug(u'SC_MCS_MSGCHANNEL: messageChannelId=%d' % self._messageChannelId)
         else:
             self._messageChannelId = 0
-            log.debug("SC_MCS_MSGCHANNEL not present, auto-detect will not use message channel")
+            log.debug(u'SC_MCS_MSGCHANNEL not present, auto-detect will not use message channel')
 
         #send domain request
         self.sendErectDomainRequest()
@@ -574,10 +570,10 @@ class Client(MCSLayer):
         data.readType(opcode)
 
         if not self.readMCSPDUHeader(opcode.value, DomainMCSPDU.ATTACH_USER_CONFIRM):
-            raise InvalidExpectedDataException("Invalid MCS PDU : ATTACH_USER_CONFIRM expected")
+            raise InvalidExpectedDataException(u'Invalid MCS PDU : ATTACH_USER_CONFIRM expected')
 
         if per.readEnumerates(data) != 0:
-            raise InvalidExpectedDataException("Server reject user")
+            raise InvalidExpectedDataException(u'Server reject user')
 
         self._userId = per.readInteger16(data, Channel.MCS_USERCHANNEL_BASE)
 
@@ -594,19 +590,19 @@ class Client(MCSLayer):
         data.readType(opcode)
 
         if not self.readMCSPDUHeader(opcode.value, DomainMCSPDU.CHANNEL_JOIN_CONFIRM):
-            raise InvalidExpectedDataException("Invalid MCS PDU : CHANNEL_JOIN_CONFIRM expected")
+            raise InvalidExpectedDataException(u'Invalid MCS PDU : CHANNEL_JOIN_CONFIRM expected')
 
         confirm = per.readEnumerates(data)
 
         userId = per.readInteger16(data, Channel.MCS_USERCHANNEL_BASE)
         if self._userId != userId:
-            raise InvalidExpectedDataException("Invalid MCS User Id")
+            raise InvalidExpectedDataException(u'Invalid MCS User Id')
 
         channelId = per.readInteger16(data)
         log.debug('MCS ChannelJoinConfirm channelId={} confirm={}'.format(channelId, confirm))
         #must confirm global channel and user channel
         if (confirm != 0) and (channelId == Channel.MCS_GLOBAL_CHANNEL or channelId == self._userId):
-            raise InvalidExpectedDataException("Server must confirm static channel")
+            raise InvalidExpectedDataException(u'Server must confirm static channel')
 
         if confirm == 0:
             serverNet = self._serverSettings.getBlock(gcc.MessageType.SC_NET)
@@ -625,13 +621,12 @@ class Client(MCSLayer):
         """
         # https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/2610fcc7-3df4-4166-85bb-2c7ae21f6151
         ccReq = gcc.writeConferenceCreateRequest(self._clientSettings)
-        log.debug("Client.sendConnectInitial()")
+        log.debug(u'Client.sendConnectInitial()')
         ccReqStream = Stream()
         ccReqStream.writeType(ccReq)
         data = ccReqStream.getvalue()
-        log.debug('ccReq {} {}'.format(binascii.hexlify(data).decode('utf-8'), len(data)))
-
-        tmp = (ber.writeOctetstring(b"\x01"), ber.writeOctetstring(b"\x01"), ber.writeBoolean(True),
+        log.debug('ccReq {} {}'.format(hexlify(data).decode('utf-8'), len(data)))
+        tmp = (ber.writeOctetstring(b'\x01'), ber.writeOctetstring(b'\x01'), ber.writeBoolean(True),
                self.writeDomainParams(34, 2, 0, 0xffff),
                self.writeDomainParams(1, 1, 1, 0x420),
                self.writeDomainParams(0xffff, 0xfc17, 0xffff, 0xffff),
@@ -643,7 +638,7 @@ class Client(MCSLayer):
         """
         @summary: Send a formated erect domain request for RDP connection
         """
-        log.debug("Client.sendErectDomainRequest()")
+        log.debug(u'Client.sendErectDomainRequest()')
         self._transport.send((self.writeMCSPDUHeader(UInt8(DomainMCSPDU.ERECT_DOMAIN_REQUEST)),
                               per.writeInteger(0),
                               per.writeInteger(0)))
@@ -652,7 +647,7 @@ class Client(MCSLayer):
         """
         @summary: Send a formated attach user request for RDP connection
         """
-        log.debug("Client.sendAttachUserRequest()")
+        log.debug(u'Client.sendAttachUserRequest()')
         self._transport.send(self.writeMCSPDUHeader(UInt8(DomainMCSPDU.ATTACH_USER_REQUEST)))
 
     def sendChannelJoinRequest(self, channelId):
@@ -692,7 +687,7 @@ class Server(MCSLayer):
         if self._transport._selectedProtocol == 0:
             self._serverSettings.SC_SECURITY.encryptionMethod.value = gcc.EncryptionMethod.ENCRYPTION_FLAG_128BIT
             self._serverSettings.SC_SECURITY.encryptionLevel.value = gcc.EncryptionLevel.ENCRYPTION_LEVEL_HIGH
-            self._serverSettings.SC_SECURITY.serverRandom.value = rsa.random(256)
+            self._serverSettings.SC_SECURITY.serverRandom.value = random(256)
             self._serverSettings.SC_SECURITY.serverCertificate = self._presentation.getCertificate()
 
         self._serverSettings.SC_CORE.clientRequestedProtocol.value = self._transport._requestedProtocol
@@ -711,7 +706,7 @@ class Server(MCSLayer):
         ber.readOctetString(data)
 
         if not ber.readBoolean(data):
-            raise InvalidExpectedDataException("invalid expected BER boolean tag")
+            raise InvalidExpectedDataException(u'invalid expected BER boolean tag')
 
         self.readDomainParams(data)
         self.readDomainParams(data)
@@ -743,7 +738,7 @@ class Server(MCSLayer):
         data.readType(opcode)
 
         if not self.readMCSPDUHeader(opcode.value, DomainMCSPDU.ERECT_DOMAIN_REQUEST):
-            raise InvalidExpectedDataException("Invalid MCS PDU : ERECT_DOMAIN_REQUEST expected")
+            raise InvalidExpectedDataException(u'Invalid MCS PDU : ERECT_DOMAIN_REQUEST expected')
 
         per.readInteger(data)
         per.readInteger(data)
@@ -762,7 +757,7 @@ class Server(MCSLayer):
         data.readType(opcode)
 
         if not self.readMCSPDUHeader(opcode.value, DomainMCSPDU.ATTACH_USER_REQUEST):
-            raise InvalidExpectedDataException("Invalid MCS PDU : ATTACH_USER_REQUEST expected")
+            raise InvalidExpectedDataException(u'Invalid MCS PDU : ATTACH_USER_REQUEST expected')
 
         self.sendAttachUserConfirm()
         self.setNextState(self.recvChannelJoinRequest)
@@ -779,11 +774,11 @@ class Server(MCSLayer):
         data.readType(opcode)
 
         if not self.readMCSPDUHeader(opcode.value, DomainMCSPDU.CHANNEL_JOIN_REQUEST):
-            raise InvalidExpectedDataException("Invalid MCS PDU : CHANNEL_JOIN_REQUEST expected")
+            raise InvalidExpectedDataException(u'Invalid MCS PDU : CHANNEL_JOIN_REQUEST expected')
 
         userId = per.readInteger16(data, Channel.MCS_USERCHANNEL_BASE)
         if self._userId != userId:
-            raise InvalidExpectedDataException("Invalid MCS User Id")
+            raise InvalidExpectedDataException(u'Invalid MCS User Id')
 
         channelId = per.readInteger16(data)
         #actually algo support virtual channel but RDPY have no virtual channel

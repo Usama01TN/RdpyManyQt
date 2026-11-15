@@ -17,7 +17,6 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 Log engine in RDPY
 Actually very basic log engine
@@ -57,10 +56,10 @@ def log(message):
     @param message: string to print
     """
     if _LOG_FILE:
-        f = open(_LOG_FILE, "a+")
-        f.write("%s\n" % message)
+        f = open(_LOG_FILE, u'a+')
+        f.write(u'%s\n' % message)
         f.close()
-    print("[*] %s" % message)
+    print(u'[*] %s' % message)
 
 
 def error(message):
@@ -70,7 +69,7 @@ def error(message):
     """
     if _LOG_LEVEL > Level.ERROR:
         return
-    log("ERROR:\t%s" % message)
+    log(u'ERROR:\t%s' % message)
 
 
 def warning(message):
@@ -80,7 +79,7 @@ def warning(message):
     """
     if _LOG_LEVEL > Level.WARNING:
         return
-    log("WARNING:\t%s" % message)
+    log(u'WARNING:\t%s' % message)
 
 
 def info(message):
@@ -90,7 +89,7 @@ def info(message):
     """
     if _LOG_LEVEL > Level.INFO:
         return
-    log("INFO:\t%s" % message)
+    log(u'INFO:\t%s' % message)
 
 
 def debug(message):
@@ -100,12 +99,12 @@ def debug(message):
     """
     if _LOG_LEVEL > Level.DEBUG:
         return
-    log("DEBUG:\t%s" % message)
+    log(u'DEBUG:\t%s' % message)
 
 
 def _levelFromEnvironment():
-    import os
-    name = os.environ.get('RDPY_LOG_LEVEL', '').upper()
+    from os import environ
+    name = environ.get('RDPY_LOG_LEVEL', '').upper()
     if name and hasattr(Level, name):
         set_level(getattr(Level, name))
 

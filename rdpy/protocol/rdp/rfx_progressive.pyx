@@ -25,14 +25,14 @@ Handles RDPGFX_CODECID_CAPROGRESSIVE (0x0009) in WIRE_TO_SURFACE_PDU_2.
 """
 
 import struct
-import numpy as np
+from numpy import empty, frombuffer, int16, ndarray, uint8
 # typed memoryviews only: no NumPy C API, so NumPy is not a build dependency
 # (iOS / Android cross builds have no target NumPy to compile against)
 from libc.stdint cimport uint8_t, uint16_t, uint32_t, uint64_t, int16_t, int32_t
 from libc.stdlib cimport calloc, free
 from libc.string cimport memcpy, memset
 
-import rdpy.core.log as log
+from rdpy.core import log
 
 # Progressive block types
 PROG_WBT_SYNC = 0xCCC0
@@ -1074,8 +1074,8 @@ cdef class RfxProgressiveDecoder:
         cdef int data_len = len(b_data)
 
         cdef uint8_t[:] surf_mv
-        if isinstance(surf_data, (bytes, bytearray, memoryview, np.ndarray)):
-            surf_mv = np.frombuffer(surf_data, dtype=np.uint8)
+        if isinstance(surf_data, (bytes, bytearray, memoryview, ndarray)):
+            surf_mv = frombuffer(surf_data, dtype=uint8)
         else:
             surf_mv = surf_data
         cdef uint8_t* p_surf = &surf_mv[0]
@@ -1414,8 +1414,8 @@ def _place_tile_abs(y_coeffs, cb_coeffs, cr_coeffs,
     cdef const int16_t[::1] cr_arr = cr_coeffs
 
     cdef uint8_t[:] out_mv
-    if isinstance(output, (bytes, bytearray, memoryview, np.ndarray)):
-        out_mv = np.frombuffer(output, dtype=np.uint8)
+    if isinstance(output, (bytes, bytearray, memoryview, ndarray)):
+        out_mv = frombuffer(output, dtype=uint8)
     else:
         out_mv = output
     _cy_place_tile_abs(&y_arr[0],
@@ -1441,9 +1441,9 @@ def _decode_component(data, quant_obj, prev_dequant=None, is_diff=False, extrapo
         q = _c_default_quant()
 
     cdef CRfxQuant shift = _c_prog_quant_shift(q, q, 0)
-    out_pixels = np.empty(4096, dtype=np.int16)
-    out_dequant = np.empty(4096, dtype=np.int16)
-    out_raw_sign = np.empty(4096, dtype=np.int16)
+    out_pixels = empty(4096, dtype=int16)
+    out_dequant = empty(4096, dtype=int16)
+    out_raw_sign = empty(4096, dtype=int16)
     cdef int16_t[::1] pixels_mv = out_pixels
     cdef int16_t[::1] dequant_mv = out_dequant
     cdef int16_t[::1] raw_sign_mv = out_raw_sign

@@ -17,32 +17,26 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 #
-
 """
 RDPDR - Device Redirection Virtual Channel Extension (MS-RDPEFS).
 Handles the "rdpdr" static virtual channel: the core initialization
 sequence (announce, client name, capabilities, client id), the device
 list announce and the dispatching of I/O request packets (IRP) from the
 server to the redirected client devices.
-
 Device implementations live in their own modules (see rdpdr_drive.py for
 file system / drive redirection) and derive from RdpdrDevice.
-
 Ported from FreeRDP channels/rdpdr/client (rdpdr_main.c, rdpdr_capabilities.c,
 irp.c, devman.c).
-
 Protocol reference: [MS-RDPEFS]
 https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpefs/
 """
 from __future__ import absolute_import, division, print_function
-
-import os
-import socket
-import struct
-import threading
-
+from threading import current_thread, Lock, main_thread, Thread
+from struct import pack, unpack, unpack_from
+from socket import gethostname
+from os import urandom
 from rdpy.core.layer import LayerAutomata
-import rdpy.core.log as log
+from rdpy.core import log
 
 # Virtual Channel PDU flags (MS-RDPBCGR 2.2.6.1.1)
 CHANNEL_FLAG_FIRST = 0x00000001
@@ -158,6 +152,17 @@ STATUS_LOCK_NOT_GRANTED = 0xC0000055
 STATUS_RANGE_NOT_LOCKED = 0xC000007E
 STATUS_INSUFFICIENT_RESOURCES = 0xC000009A
 STATUS_INVALID_LOCK_RANGE = 0xC00001A1
+# printer, serial / parallel port and smart card devices
+STATUS_TIMEOUT = 0x00000102
+STATUS_PENDING = 0x00000103
+STATUS_NOT_IMPLEMENTED = 0xC0000002
+STATUS_INVALID_DEVICE_REQUEST = 0xC0000010
+STATUS_NO_MEMORY = 0xC0000017
+STATUS_BUFFER_TOO_SMALL = 0xC0000023
+STATUS_PRINT_QUEUE_FULL = 0xC00000C6
+STATUS_CANCELLED = 0xC0000120
+STATUS_INVALID_DEVICE_STATE = 0xC0000184
+STATUS_IO_DEVICE_ERROR = 0xC0000185
 # Largest reassembled RDPDR PDU accepted from the server. Real requests are
 # far smaller (Windows writes in chunks of at most a few hundred KB); the
 # limit only stops a server from making the client buffer gigabytes.
@@ -173,37 +178,37 @@ STATE_CLIENTID_CONFIRM = 6
 STATE_READY = 7
 STATE_USER_LOGGEDON = 8
 _STATE_NAMES = {
-    STATE_INITIAL: "INITIAL",
-    STATE_ANNOUNCE: "ANNOUNCE",
-    STATE_ANNOUNCE_REPLY: "ANNOUNCE_REPLY",
-    STATE_NAME_REQUEST: "NAME_REQUEST",
-    STATE_SERVER_CAPS: "SERVER_CAPS",
-    STATE_CLIENT_CAPS: "CLIENT_CAPS",
-    STATE_CLIENTID_CONFIRM: "CLIENTID_CONFIRM",
-    STATE_READY: "READY",
-    STATE_USER_LOGGEDON: "USER_LOGGEDON",
+    STATE_INITIAL: u'INITIAL',
+    STATE_ANNOUNCE: u'ANNOUNCE',
+    STATE_ANNOUNCE_REPLY: u'ANNOUNCE_REPLY',
+    STATE_NAME_REQUEST: u'NAME_REQUEST',
+    STATE_SERVER_CAPS: u'SERVER_CAPS',
+    STATE_CLIENT_CAPS: u'CLIENT_CAPS',
+    STATE_CLIENTID_CONFIRM: u'CLIENTID_CONFIRM',
+    STATE_READY: u'READY',
+    STATE_USER_LOGGEDON: u'USER_LOGGEDON',
 }
 _PACKET_NAMES = {
-    PAKID_CORE_SERVER_ANNOUNCE: "SERVER_ANNOUNCE",
-    PAKID_CORE_CLIENTID_CONFIRM: "CLIENTID_CONFIRM",
-    PAKID_CORE_CLIENT_NAME: "CLIENT_NAME",
-    PAKID_CORE_DEVICELIST_ANNOUNCE: "DEVICELIST_ANNOUNCE",
-    PAKID_CORE_DEVICE_REPLY: "DEVICE_REPLY",
-    PAKID_CORE_DEVICE_IOREQUEST: "DEVICE_IOREQUEST",
-    PAKID_CORE_DEVICE_IOCOMPLETION: "DEVICE_IOCOMPLETION",
-    PAKID_CORE_SERVER_CAPABILITY: "SERVER_CAPABILITY",
-    PAKID_CORE_CLIENT_CAPABILITY: "CLIENT_CAPABILITY",
-    PAKID_CORE_DEVICELIST_REMOVE: "DEVICELIST_REMOVE",
-    PAKID_CORE_USER_LOGGEDON: "USER_LOGGEDON",
-    PAKID_PRN_CACHE_DATA: "PRN_CACHE_DATA",
-    PAKID_PRN_USING_XPS: "PRN_USING_XPS",
+    PAKID_CORE_SERVER_ANNOUNCE: u'SERVER_ANNOUNCE',
+    PAKID_CORE_CLIENTID_CONFIRM: u'CLIENTID_CONFIRM',
+    PAKID_CORE_CLIENT_NAME: u'CLIENT_NAME',
+    PAKID_CORE_DEVICELIST_ANNOUNCE: u'DEVICELIST_ANNOUNCE',
+    PAKID_CORE_DEVICE_REPLY: u'DEVICE_REPLY',
+    PAKID_CORE_DEVICE_IOREQUEST: u'DEVICE_IOREQUEST',
+    PAKID_CORE_DEVICE_IOCOMPLETION: u'DEVICE_IOCOMPLETION',
+    PAKID_CORE_SERVER_CAPABILITY: u'SERVER_CAPABILITY',
+    PAKID_CORE_CLIENT_CAPABILITY: u'CLIENT_CAPABILITY',
+    PAKID_CORE_DEVICELIST_REMOVE: u'DEVICELIST_REMOVE',
+    PAKID_CORE_USER_LOGGEDON: u'USER_LOGGEDON',
+    PAKID_PRN_CACHE_DATA: u'PRN_CACHE_DATA',
+    PAKID_PRN_USING_XPS: u'PRN_USING_XPS',
 }
 _DEVICE_TYPE_NAMES = {
-    RDPDR_DTYP_SERIAL: "serial",
-    RDPDR_DTYP_PARALLEL: "parallel",
-    RDPDR_DTYP_PRINT: "printer",
-    RDPDR_DTYP_FILESYSTEM: "drive",
-    RDPDR_DTYP_SMARTCARD: "smartcard",
+    RDPDR_DTYP_SERIAL: u'serial',
+    RDPDR_DTYP_PARALLEL: u'parallel',
+    RDPDR_DTYP_PRINT: u'printer',
+    RDPDR_DTYP_FILESYSTEM: u'drive',
+    RDPDR_DTYP_SMARTCARD: u'smartcard',
 }
 
 
@@ -225,7 +230,7 @@ class StreamReader(object):
 
     def _need(self, n):
         if n < 0 or self._pos + n > len(self._data):
-            raise ValueError("rdpdr: truncated PDU (need %d bytes, have %d)" % (n, self.remaining()))
+            raise ValueError(u'rdpdr: truncated PDU (need %d bytes, have %d)' % (n, self.remaining()))
 
     def u8(self):
         self._need(1)
@@ -235,25 +240,25 @@ class StreamReader(object):
 
     def u16(self):
         self._need(2)
-        v = struct.unpack_from('<H', self._data, self._pos)[0]
+        v = unpack_from('<H', self._data, self._pos)[0]
         self._pos += 2
         return v
 
     def u32(self):
         self._need(4)
-        v = struct.unpack_from('<I', self._data, self._pos)[0]
+        v = unpack_from('<I', self._data, self._pos)[0]
         self._pos += 4
         return v
 
     def u64(self):
         self._need(8)
-        v = struct.unpack_from('<Q', self._data, self._pos)[0]
+        v = unpack_from('<Q', self._data, self._pos)[0]
         self._pos += 8
         return v
 
     def i64(self):
         self._need(8)
-        v = struct.unpack_from('<q', self._data, self._pos)[0]
+        v = unpack_from('<q', self._data, self._pos)[0]
         self._pos += 8
         return v
 
@@ -379,6 +384,107 @@ class RdpdrDevice(object):
         pass
 
 
+def sanitizeDosName(name, fallback):
+    """
+    @summary: Device name usable in DEVICE_ANNOUNCE.PreferredDosName: printable
+    ASCII without the forbidden characters (MS-RDPEFS 2.2.1.3), at most 7 characters
+    @param name: {str}
+    @param fallback: {str} used when nothing is left
+    @return: {str}
+    """
+    cleaned = ''.join(c for c in (name or '') if 0x20 < ord(c) < 0x7F and c not in ':<>"/\\|')
+    return (cleaned or fallback)[:7]
+
+
+class IrpWorker(object):
+    """
+    @summary: Processes the IRPs of a device on its own thread, in arrival order
+    (FreeRDP's per-device IRP thread), so a slow request (a print job sent to
+    the spooler, a blocking port) never blocks the Qt / Twisted main loop.
+    The number and size of queued requests are bounded: a server can not make
+    the client buffer unlimited data.
+    """
+
+    def __init__(self, name, process, reset=None, maxIrps=256, maxBytes=64 * 1024 * 1024):
+        """
+        @param name: {str} thread name
+        @param process: {callable(irp)} handles one IRP and completes it
+        @param reset: {callable()} run on the worker thread on channel reset / shutdown
+        """
+        from rdpy.core.compat import queue
+        self._process = process
+        self._reset = reset
+        self._maxIrps = maxIrps
+        self._maxBytes = maxBytes
+        self._queue = queue.Queue()
+        self._lock = Lock()
+        self._count = 0
+        self._bytes = 0
+        self._thread = Thread(target=self._run, name=name)
+        self._thread.daemon = True
+        self._thread.start()
+
+    def submit(self, irp):
+        """
+        @summary: Queue an IRP; answers STATUS_INSUFFICIENT_RESOURCES when the queue is full
+        @return: {bool} queued
+        """
+        size = irp.input.remaining()
+        with self._lock:
+            accepted = self._count < self._maxIrps and self._bytes + size <= self._maxBytes
+            if accepted:
+                self._count += 1
+                self._bytes += size
+        if not accepted:
+            log.warning(u'RDPDR: too many pending requests for device %d, rejecting IRP 0x%x' %
+                        (irp.deviceId, irp.majorFunction))
+            irp.ioStatus = STATUS_INSUFFICIENT_RESOURCES
+            irp.complete()
+            return False
+        self._queue.put(('irp', irp, size))
+        return True
+
+    def reset(self):
+        """@summary: run the reset callback on the worker thread (channel re-initialized)"""
+        self._queue.put(('reset', None, 0))
+
+    def stop(self):
+        """@summary: run the reset callback then end the thread"""
+        self._queue.put(('quit', None, 0))
+
+    def join(self, timeout=None):
+        """@summary: wait for the end of the thread (after stop())"""
+        if self._thread is not current_thread():
+            self._thread.join(timeout)
+
+    def _run(self):
+        while True:
+            kind, irp, size = self._queue.get()
+            if kind in ('reset', 'quit'):
+                if self._reset is not None:
+                    try:
+                        self._reset()
+                    except Exception as e:
+                        log.error(u'RDPDR: device reset failed: %r' % (e,))
+                if kind == 'quit':
+                    return
+                continue
+            with self._lock:
+                self._count -= 1
+                self._bytes -= size
+            if irp.isCancelled():
+                # queued before a disconnect or a channel reset: the server forgot it
+                irp.discard()
+                continue
+            try:
+                self._process(irp)
+            except Exception as e:  # never let the worker die, always answer
+                log.error(u'RDPDR: IRP 0x%x failed: %r' % (irp.majorFunction, e))
+                irp.output = bytearray()
+                irp.ioStatus = STATUS_UNSUCCESSFUL
+                irp.complete()
+
+
 class DeviceManager(object):
     """
     @summary: Registry of redirected devices (FreeRDP devman.c).
@@ -391,7 +497,7 @@ class DeviceManager(object):
     def __init__(self):
         self._devices = {}
         self._idSequence = 1
-        self._lock = threading.Lock()
+        self._lock = Lock()
 
     def nextId(self):
         with self._lock:
@@ -485,7 +591,7 @@ class RdpdrLayer(LayerAutomata):
         self._clientSpecialTypeDeviceCap = 0
 
         self._clientID = 0
-        self._computerName = (socket.gethostname() or "rdpyqt").split('.')[0][:15] or "rdpyqt"
+        self._computerName = (gethostname() or u'rdpyqt').split('.')[0][:15] or u'rdpyqt'
         self._userLoggedOn = False
         self._haveClientId = False
         self._haveServerCaps = False
@@ -518,8 +624,8 @@ class RdpdrLayer(LayerAutomata):
         @return: {int} device id
         """
         deviceId = self._devman.registerDevice(device)
-        log.info("RDPDR: registered [%s] device '%s' (id=%d)" %
-                 (_DEVICE_TYPE_NAMES.get(device.deviceType, "?"), device.name, deviceId))
+        log.info(u'RDPDR: registered [%s] device \'%s\' (id=%d)' %
+                 (_DEVICE_TYPE_NAMES.get(device.deviceType, u'?'), device.name, deviceId))
         if self._state in (STATE_READY, STATE_USER_LOGGEDON) and self._transport is not None:
             # hotplug: device added while the session is running
             self._sendDeviceListAnnounce(self._userLoggedOn)
@@ -536,6 +642,113 @@ class RdpdrLayer(LayerAutomata):
         device = rdpdr_drive.DriveDevice(name, path, asyncIo=asyncIo)
         device.setTransferCallback(getattr(self, '_driveTransferCallback', None))
         return self.addDevice(device)
+
+    def _portName(self, deviceType, prefix):
+        """@summary: next free DOS name of a kind of device: PRN1, PRN2..."""
+        used = set(d.name for d in self._devman.devices() if d.deviceType == deviceType)
+        n = 1
+        while u'%s%d' % (prefix, n) in used:
+            n += 1
+        return u'%s%d' % (prefix, n)
+
+    def addPrinter(self, printerName, driverName=None, isDefault=False, backend=None):
+        """
+        @summary: Redirect a local printer (FreeRDP /printer:<name>[,<driver>[,default]])
+        @param printerName: {str} local printer (CUPS queue / Windows printer), shown on the server
+        @param driverName: {str|None} Windows driver the server renders with
+                           (default "MS Publisher Imagesetter": PostScript)
+        @param isDefault: {bool} default printer of the remote session
+        @param backend: {rdpdr_printer.PrinterBackend|None} default: CUPS, or the Windows spooler
+        @return: {int} device id
+        """
+        from . import rdpdr_printer
+        device = rdpdr_printer.PrinterDevice(self._portName(RDPDR_DTYP_PRINT, u'PRN'), printerName,
+                                             backend or rdpdr_printer.defaultBackend(), driverName, isDefault)
+        device.setJobCallback(getattr(self, '_printJobCallback', None))
+        return self.addDevice(device)
+
+    def addAllPrinters(self, backend=None):
+        """
+        @summary: Redirect every local printer (FreeRDP /printer)
+        @return: {list[int]} device ids
+        """
+        from . import rdpdr_printer
+        backend = backend or rdpdr_printer.defaultBackend()
+        printers = backend.enumPrinters()
+        if not printers:
+            log.warning(u'RDPDR: no local printer found (%s)' % backend.name)
+        return [self.addPrinter(p.name, p.driver, p.isDefault, backend) for p in printers]
+
+    def addPrintToFolder(self, folder, driverName=None, isDefault=False, name=u'Print to folder'):
+        """
+        @summary: A printer that saves every document in a local folder (PDF with the
+        default "Microsoft Print to PDF" driver)
+        @return: {int} device id
+        """
+        from . import rdpdr_printer
+        return self.addPrinter(name, driverName or rdpdr_printer.DRIVER_PDF, isDefault,
+                               rdpdr_printer.FileBackend(folder))
+
+    def setPrintJobCallback(self, callback):
+        """
+        @summary: callback(printerName, title, bytes, destination, error) for each
+        document printed through a redirected printer (printer thread)
+        """
+        self._printJobCallback = callback
+        for device in self.getDevices():
+            if hasattr(device, 'setJobCallback'):
+                device.setJobCallback(callback)
+
+    def addSerialPort(self, name, path, driver=None, permissive=False):
+        """
+        @summary: Redirect a local serial port (FreeRDP /serial:<name>,<path>[,<driver>[,permissive]])
+        @param name: {str} port name on the server (COM1...)
+        @param path: {str} local port (/dev/ttyUSB0, COM3) or pyserial URL (socket://host:port...)
+        @return: {int} device id
+        """
+        from . import rdpdr_serial
+        return self.addDevice(rdpdr_serial.SerialPortDevice(name, path, driver, permissive))
+
+    def addParallelPort(self, name, path):
+        """
+        @summary: Redirect a local parallel port (FreeRDP /parallel:<name>,<path>)
+        @param name: {str} port name on the server (LPT1...)
+        @param path: {str} local device (/dev/lp0, /dev/usb/lp0) or file
+        @return: {int} device id
+        """
+        from . import rdpdr_parallel
+        return self.addDevice(rdpdr_parallel.ParallelPortDevice(name, path))
+
+    def addSmartcard(self, readerFilters=None):
+        """
+        @summary: Redirect the local smart card readers (FreeRDP /smartcard[:<names>])
+        @param readerFilters: {list[str]|None} only the readers whose name contains one of them
+        @return: {int} device id
+        @raise OSError: pyscard is not installed
+        """
+        from . import rdpdr_smartcard
+        if self._devman.hasType(RDPDR_DTYP_SMARTCARD):
+            raise ValueError(u'smart card redirection is already enabled')
+        return self.addDevice(rdpdr_smartcard.SmartcardDevice(readerFilters))
+
+    def describeDevices(self):
+        """
+        @return: {dict} kind ('drives', 'printers', 'ports', 'smartcard') -> list of descriptions
+        """
+        kinds = {'drives': [], 'printers': [], 'ports': [], 'smartcard': []}
+        for d in self._devman.devices():
+            if d.deviceType == RDPDR_DTYP_FILESYSTEM:
+                kinds['drives'].append('%s (%s)' % (d.name, getattr(d, 'basePath', '?')))
+            elif d.deviceType == RDPDR_DTYP_PRINT:
+                kinds['printers'].append('%s: %s [%s]%s' % (d.name, getattr(d, 'printerName', '?'),
+                                                            getattr(d, 'driverName', '?'),
+                                                            ' (default)' if getattr(d, 'isDefault', False) else ''))
+            elif d.deviceType in (RDPDR_DTYP_SERIAL, RDPDR_DTYP_PARALLEL):
+                kinds['ports'].append('%s (%s)' % (d.name, getattr(d, 'path', '?')))
+            elif d.deviceType == RDPDR_DTYP_SMARTCARD:
+                filters = getattr(d, 'filters', None)
+                kinds['smartcard'].append('readers matching %s' % ', '.join(filters) if filters else 'all readers')
+        return kinds
 
     def setDriveTransferCallback(self, callback):
         """
@@ -556,7 +769,7 @@ class RdpdrLayer(LayerAutomata):
             return
         if (self._transport is not None and self._state in (STATE_READY, STATE_USER_LOGGEDON) and
                 self._serverExtendedPDU & RDPDR_DEVICE_REMOVE_PDUS):
-            body = struct.pack('<HHII', RDPDR_CTYP_CORE, PAKID_CORE_DEVICELIST_REMOVE, 1, deviceId)
+            body = pack('<HHII', RDPDR_CTYP_CORE, PAKID_CORE_DEVICELIST_REMOVE, 1, deviceId)
             self._send(body)
 
     def getDevices(self):
@@ -578,7 +791,7 @@ class RdpdrLayer(LayerAutomata):
     # -------------------------------------------------------------------
 
     def connect(self):
-        log.debug("RdpdrLayer.connect() devices=%d" % len(self._devman.devices()))
+        log.debug(u'RdpdrLayer.connect() devices=%d' % len(self._devman.devices()))
 
     def close(self):
         self.shutdown()
@@ -590,9 +803,9 @@ class RdpdrLayer(LayerAutomata):
         """
         data = s.read()
         if len(data) < 8:
-            log.warning("RDPDR: recv data too short (%d bytes)" % len(data))
+            log.warning(u'RDPDR: recv data too short (%d bytes)' % len(data))
             return
-        totalLen, flags = struct.unpack_from('<II', data, 0)
+        totalLen, flags = unpack_from('<II', data, 0)
         payload = data[8:]
 
         if flags & (CHANNEL_FLAG_SUSPEND | CHANNEL_FLAG_RESUME):
@@ -606,7 +819,7 @@ class RdpdrLayer(LayerAutomata):
             self._vchanDiscard = False
             if totalLen > MAX_PDU_SIZE:
                 # do not buffer an oversized PDU, skip its chunks up to the LAST one
-                log.warning("RDPDR: PDU of %d bytes exceeds the %d bytes limit, dropped" %
+                log.warning(u'RDPDR: PDU of %d bytes exceeds the %d bytes limit, dropped' %
                             (totalLen, MAX_PDU_SIZE))
                 self._vchanDiscard = not (flags & CHANNEL_FLAG_LAST)
                 return
@@ -619,11 +832,11 @@ class RdpdrLayer(LayerAutomata):
         elif self._firstFlagReceived:
             self._vchanBuf += payload
         else:
-            log.warning("RDPDR: chunk without CHANNEL_FLAG_FIRST, dropped")
+            log.warning(u'RDPDR: chunk without CHANNEL_FLAG_FIRST, dropped')
             return
 
         if len(self._vchanBuf) > self._vchanTotal:
-            log.warning("RDPDR: reassembled data larger than announced length, dropped")
+            log.warning(u'RDPDR: reassembled data larger than announced length, dropped')
             self._vchanBuf = bytearray()
             self._firstFlagReceived = False
             return
@@ -633,12 +846,12 @@ class RdpdrLayer(LayerAutomata):
             pdu = bytes(self._vchanBuf)
             self._vchanBuf = bytearray()
             if len(pdu) != self._vchanTotal:
-                log.warning("RDPDR: reassembled %d bytes, expected %d" % (len(pdu), self._vchanTotal))
+                log.warning(u'RDPDR: reassembled %d bytes, expected %d' % (len(pdu), self._vchanTotal))
                 return
             try:
                 self._processReceive(pdu)
             except ValueError as e:
-                log.warning("RDPDR: %s" % e)
+                log.warning(u'RDPDR: %s' % e)
 
     # -------------------------------------------------------------------
     # Receive dispatch (rdpdr_process_receive)
@@ -650,8 +863,8 @@ class RdpdrLayer(LayerAutomata):
         s = StreamReader(data)
         component = s.u16()
         packetId = s.u16()
-        log.debug("RDPDR: recv component=0x%04x %s(0x%04x) len=%d" %
-                  (component, _PACKET_NAMES.get(packetId, "?"), packetId, len(data)))
+        log.debug(u'RDPDR: recv component=0x%04x %s(0x%04x) len=%d' %
+                  (component, _PACKET_NAMES.get(packetId, u'?'), packetId, len(data)))
 
         if component != RDPDR_CTYP_CORE:
             self._processComponent(component, packetId, s)
@@ -684,7 +897,7 @@ class RdpdrLayer(LayerAutomata):
                 # Windows re-announces the channel after logon and may send
                 # USER_LOGGEDON before the new SERVER_CAPABILITY arrives;
                 # the announce is sent by _tryAdvance() later.
-                log.warning("RDPDR: USER_LOGGEDON in state %s before server caps, ignoring" %
+                log.warning(u'RDPDR: USER_LOGGEDON in state %s before server caps, ignoring' %
                             _STATE_NAMES.get(self._state))
                 self._userLoggedOn = True
             else:
@@ -696,16 +909,16 @@ class RdpdrLayer(LayerAutomata):
                 deviceId = s.u32()
                 status = s.u32()
                 if status != STATUS_SUCCESS:
-                    log.warning("RDPDR: server rejected device %d (status=0x%08x)" % (deviceId, status))
+                    log.warning(u'RDPDR: server rejected device %d (status=0x%08x)' % (deviceId, status))
                     self._devman.unregisterDevice(deviceId)
                 else:
-                    log.debug("RDPDR: server accepted device %d" % deviceId)
+                    log.debug(u'RDPDR: server accepted device %d' % deviceId)
 
         elif packetId == PAKID_CORE_DEVICE_IOREQUEST:
             self._processIrp(data)
 
         else:
-            log.warning("RDPDR: RDPDR_CTYP_CORE unknown PacketId 0x%04x" % packetId)
+            log.warning(u'RDPDR: RDPDR_CTYP_CORE unknown PacketId 0x%04x' % packetId)
 
     def _processComponent(self, component, packetId, s):
         """
@@ -715,7 +928,7 @@ class RdpdrLayer(LayerAutomata):
             device = self._devman.getDeviceByType(RDPDR_DTYP_PRINT)
             if device is not None and device.customComponentRequest(component, packetId, s):
                 return
-        log.debug("RDPDR: unhandled component 0x%04x packetId 0x%04x" % (component, packetId))
+        log.debug(u'RDPDR: unhandled component 0x%04x packetId 0x%04x' % (component, packetId))
 
     # -------------------------------------------------------------------
     # State machine (rdpdr_check_channel_state)
@@ -723,15 +936,15 @@ class RdpdrLayer(LayerAutomata):
 
     def _stateAdvance(self, nextState):
         if nextState != self._state:
-            log.debug("RDPDR: state %s -> %s" %
+            log.debug(u'RDPDR: state %s -> %s' %
                       (_STATE_NAMES.get(self._state), _STATE_NAMES.get(nextState)))
         self._state = nextState
 
     def _stateCheck(self, packetId, nextState, allowed):
         if self._state not in allowed:
-            log.error("RDPDR: received %s, expected states [%s] but have state %s, aborting." %
+            log.error(u'RDPDR: received %s, expected states [%s] but have state %s, aborting.' %
                       (_PACKET_NAMES.get(packetId, hex(packetId)),
-                       "|".join(_STATE_NAMES.get(x, "?") for x in allowed),
+                       u'|'.join(_STATE_NAMES.get(x, u'?') for x in allowed),
                        _STATE_NAMES.get(self._state)))
             self._stateAdvance(STATE_INITIAL)
             return False
@@ -742,7 +955,7 @@ class RdpdrLayer(LayerAutomata):
         client = (self._clientExtendedPDU & flag) != 0
         server = (self._serverExtendedPDU & flag) != 0
         if not client or not server:
-            log.warning("RDPDR: extended PDU flag 0x%x not supported by client=%s server=%s" %
+            log.warning(u'RDPDR: extended PDU flag 0x%x not supported by client=%s server=%s' %
                         (flag, client, server))
             return False
         return True
@@ -788,25 +1001,25 @@ class RdpdrLayer(LayerAutomata):
         if (self._serverVersionMajor == RDPDR_VERSION_MAJOR and
                 self._serverVersionMinor < RDPDR_VERSION_MINOR_RDP6X):
             while clientId in (0, 0xFFFFFFFF, receivedId):
-                clientId = struct.unpack('<I', os.urandom(4))[0]
+                clientId = unpack('<I', urandom(4))[0]
         self._clientID = clientId
 
         self._clientVersionMajor = min(RDPDR_VERSION_MAJOR, self._serverVersionMajor)
         self._clientVersionMinor = min(RDPDR_VERSION_MINOR_RDP10X, self._serverVersionMinor)
-        log.debug("RDPDR: server announces version %d.%d, client uses %d.%d" %
+        log.debug(u'RDPDR: server announces version %d.%d, client uses %d.%d' %
                   (self._serverVersionMajor, self._serverVersionMinor,
                    self._clientVersionMajor, self._clientVersionMinor))
 
     def _sendClientAnnounceReply(self):
         self._stateAdvance(STATE_ANNOUNCE_REPLY)
-        self._send(struct.pack('<HHHHI', RDPDR_CTYP_CORE, PAKID_CORE_CLIENTID_CONFIRM,
+        self._send(pack('<HHHHI', RDPDR_CTYP_CORE, PAKID_CORE_CLIENTID_CONFIRM,
                                self._clientVersionMajor, self._clientVersionMinor,
                                self._clientID))
 
     def _sendClientNameRequest(self):
         self._stateAdvance(STATE_NAME_REQUEST)
         nameW = (self._computerName + '\0').encode('utf-16-le')
-        pdu = struct.pack('<HHIII', RDPDR_CTYP_CORE, PAKID_CORE_CLIENT_NAME,
+        pdu = pack('<HHIII', RDPDR_CTYP_CORE, PAKID_CORE_CLIENT_NAME,
                           1,  # unicodeFlag
                           0,  # codePage, must be zero
                           len(nameW))  # computerNameLen including null terminator
@@ -823,14 +1036,14 @@ class RdpdrLayer(LayerAutomata):
             try:
                 device.init()
             except Exception as e:
-                log.error("RDPDR: device %d init failed: %s" % (device.id, e))
+                log.error(u'RDPDR: device %d init failed: %s' % (device.id, e))
 
     def _processServerClientIdConfirm(self, s):
         versionMajor = s.u16()
         versionMinor = s.u16()
         clientId = s.u32()
         if versionMajor != self._clientVersionMajor or versionMinor != self._clientVersionMinor:
-            log.warning("RDPDR: clientid confirm requests version %d.%d (client used %d.%d)" %
+            log.warning(u'RDPDR: clientid confirm requests version %d.%d (client used %d.%d)' %
                         (versionMajor, versionMinor, self._clientVersionMajor,
                          self._clientVersionMinor))
             self._clientVersionMajor = versionMajor
@@ -851,12 +1064,12 @@ class RdpdrLayer(LayerAutomata):
             capLen = s.u16()
             version = s.u32()
             if capLen < RDPDR_CAPABILITY_HEADER_LENGTH:
-                raise ValueError("rdpdr: capability 0x%x has invalid length %d" % (capType, capLen))
+                raise ValueError(u'rdpdr: capability 0x%x has invalid length %d' % (capType, capLen))
             body = StreamReader(s.read(capLen - RDPDR_CAPABILITY_HEADER_LENGTH))
             self._serverCapabilities.add(capType)
             if capType == CAP_GENERAL_TYPE:
                 self._processGeneralCapset(body, version)
-            log.debug("RDPDR: server capability type=%d version=%d length=%d" %
+            log.debug(u'RDPDR: server capability type=%d version=%d length=%d' %
                       (capType, version, capLen))
 
     def _processGeneralCapset(self, s, version):
@@ -873,17 +1086,17 @@ class RdpdrLayer(LayerAutomata):
             self._serverSpecialTypeDeviceCap = 0
         else:
             self._serverSpecialTypeDeviceCap = s.u32()
-        log.debug("RDPDR: server general caps ioCode1=0x%08x extendedPDU=0x%08x extraFlags1=0x%08x" %
+        log.debug(u'RDPDR: server general caps ioCode1=0x%08x extendedPDU=0x%08x extraFlags1=0x%08x' %
                   (self._serverIOCode1, self._serverExtendedPDU, self._serverExtraFlags1))
 
     @staticmethod
     def _capsetHeader(capType, length, version):
-        return struct.pack('<HHI', capType, RDPDR_CAPABILITY_HEADER_LENGTH + length, version)
+        return pack('<HHI', capType, RDPDR_CAPABILITY_HEADER_LENGTH + length, version)
 
     def _generalCapset(self):
         ioCode1 = self._clientIOCode1 & self._serverIOCode1
         ioCode2 = self._clientIOCode2 & self._serverIOCode2
-        return self._capsetHeader(CAP_GENERAL_TYPE, 36, GENERAL_CAPABILITY_VERSION_02) + struct.pack(
+        return self._capsetHeader(CAP_GENERAL_TYPE, 36, GENERAL_CAPABILITY_VERSION_02) + pack(
             '<IIHHIIIIII',
             self._clientOsType,  # osType, ignored on receipt
             self._clientOsVersion,  # osVersion, must be zero
@@ -914,7 +1127,7 @@ class RdpdrLayer(LayerAutomata):
         if smart:
             capsets.append(self._capsetHeader(CAP_SMARTCARD_TYPE, 0, SMARTCARD_CAPABILITY_VERSION_01))
 
-        pdu = struct.pack('<HHHH', RDPDR_CTYP_CORE, PAKID_CORE_CLIENT_CAPABILITY, len(capsets), 0)
+        pdu = pack('<HHHH', RDPDR_CTYP_CORE, PAKID_CORE_CLIENT_CAPABILITY, len(capsets), 0)
         self._send(pdu + b''.join(capsets))
 
     # -------------------------------------------------------------------
@@ -947,15 +1160,15 @@ class RdpdrLayer(LayerAutomata):
             dosName = bytes((c if c < 0x80 else 0x5F) for c in device.name.encode('ascii', 'replace')[:7])
             dosName = dosName.ljust(8, b'\x00')
             data = device.deviceData or b''
-            entries.append(struct.pack('<II', device.deviceType, device.id) + dosName +
-                           struct.pack('<I', len(data)) + data)
-            log.info("RDPDR: announce [%s] device '%s' (type=%d id=%d)" %
-                     (_DEVICE_TYPE_NAMES.get(device.deviceType, "?"), device.name,
+            entries.append(pack('<II', device.deviceType, device.id) + dosName +
+                           pack('<I', len(data)) + data)
+            log.info(u'RDPDR: announce [%s] device \'%s\' (type=%d id=%d)' %
+                     (_DEVICE_TYPE_NAMES.get(device.deviceType, u'?'), device.name,
                       device.deviceType, device.id))
 
         if not entries:
             return
-        pdu = struct.pack('<HHI', RDPDR_CTYP_CORE, PAKID_CORE_DEVICELIST_ANNOUNCE, len(entries))
+        pdu = pack('<HHI', RDPDR_CTYP_CORE, PAKID_CORE_DEVICELIST_ANNOUNCE, len(entries))
         self._send(pdu + b''.join(entries))
 
     # -------------------------------------------------------------------
@@ -973,7 +1186,7 @@ class RdpdrLayer(LayerAutomata):
         device = self._devman.getDeviceById(deviceId)
         if device is None:
             # FreeRDP dummy_irp_response (ignoreInvalidDevices)
-            log.warning("RDPDR: IRP for unknown device %d (fileId=%d completionId=%d)" %
+            log.warning(u'RDPDR: IRP for unknown device %d (fileId=%d completionId=%d)' %
                         (deviceId, fileId, completionId))
             self._send(self._ioCompletionHeader(deviceId, completionId, STATUS_UNSUCCESSFUL))
             return
@@ -983,14 +1196,14 @@ class RdpdrLayer(LayerAutomata):
         try:
             device.irpRequest(irp)
         except Exception as e:
-            log.error("RDPDR: device %d IRP 0x%x failed: %s" % (deviceId, majorFunction, e))
+            log.error(u'RDPDR: device %d IRP 0x%x failed: %s' % (deviceId, majorFunction, e))
             irp.output = bytearray()
             irp.ioStatus = STATUS_UNSUCCESSFUL
             irp.complete()
 
     @staticmethod
     def _ioCompletionHeader(deviceId, completionId, ioStatus):
-        return struct.pack('<HHIII', RDPDR_CTYP_CORE, PAKID_CORE_DEVICE_IOCOMPLETION,
+        return pack('<HHIII', RDPDR_CTYP_CORE, PAKID_CORE_DEVICE_IOCOMPLETION,
                            deviceId, completionId, ioStatus & 0xFFFFFFFF)
 
     def _completeIrp(self, irp, generation):
@@ -998,7 +1211,7 @@ class RdpdrLayer(LayerAutomata):
         @summary: Called by Irp.complete() from any thread
         """
         pdu = self._ioCompletionHeader(irp.deviceId, irp.completionId, irp.ioStatus) + bytes(irp.output)
-        if threading.current_thread() is threading.main_thread() and self._callFromReactor is None:
+        if current_thread() is main_thread() and self._callFromReactor is None:
             self._sendCompletion(pdu, generation)
             return
         callFromReactor = self._callFromReactor
@@ -1016,7 +1229,7 @@ class RdpdrLayer(LayerAutomata):
 
     def _sendCompletion(self, pdu, generation):
         if self._isStale(generation):
-            log.debug("RDPDR: dropping stale IRP completion")
+            log.debug(u'RDPDR: dropping stale IRP completion')
             return
         self._send(pdu)
 
@@ -1029,7 +1242,7 @@ class RdpdrLayer(LayerAutomata):
         @summary: Send data via the static virtual channel, chunked to VCChunkSize
         """
         if self._transport is None:
-            log.warning("RDPDR: _send() skipped - transport is None")
+            log.warning(u'RDPDR: _send() skipped - transport is None')
             return
 
         from rdpy.core.type import String
@@ -1042,5 +1255,5 @@ class RdpdrLayer(LayerAutomata):
                 flags |= CHANNEL_FLAG_FIRST
             if offset + len(chunk) >= totalLen:
                 flags |= CHANNEL_FLAG_LAST
-            self._transport.send(String(struct.pack('<II', totalLen, flags) + chunk))
+            self._transport.send(String(pack('<II', totalLen, flags) + chunk))
             offset += len(chunk)

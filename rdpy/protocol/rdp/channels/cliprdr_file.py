@@ -19,27 +19,26 @@
 #
 """
 File copy / paste through the clipboard (MS-RDPECLIP 3.1.5.4).
-
 Files are described by a FILEGROUPDESCRIPTORW (the "FileGroupDescriptorW"
 clipboard format) and their bytes are fetched with File Contents Request /
 Response PDUs, like FreeRDP (client/common/client_cliprdr_file.c,
 winpr/libwinpr/clipboard/synthetic_file.c).
-
 * LocalFileList: files copied on this computer, offered to the server.
 * RemoteDownload: files copied on the server, downloaded into a temporary
   folder so they can be pasted locally.
 """
 from __future__ import absolute_import, division, print_function
-import os
-import re
-import shutil
-import struct
-import tempfile
-import rdpy.core.log as log
-from rdpy.core.compat import makedirs, monotonic
+from os.path import abspath, basename, dirname, getsize, isdir, isfile, join, relpath
+from os import access, listdir, sep, stat, utime, W_OK
+from struct import pack, unpack_from
+from re import compile, split
+from tempfile import mkdtemp
+from shutil import rmtree
 from rdpy.core.filetimes import EPOCH_AS_FILETIME, HUNDREDS_OF_NANOSECONDS
+from rdpy.core.compat import makedirs, monotonic
+from rdpy.core import log
 
-FORMAT_NAME_FILE_GROUP_DESCRIPTOR = "FileGroupDescriptorW"
+FORMAT_NAME_FILE_GROUP_DESCRIPTOR = u'FileGroupDescriptorW'
 # FILEDESCRIPTORW (MS-RDPECLIP 2.2.5.2.3.1)
 FILE_DESCRIPTOR_SIZE = 592
 FD_ATTRIBUTES = 0x00000004
@@ -55,7 +54,7 @@ FILECONTENTS_SIZE = 0x00000001
 FILECONTENTS_RANGE = 0x00000002
 
 _MAX_NAME = 259  # cFileName is 260 WCHAR including the terminator
-_FORBIDDEN = re.compile(r'[<>:"|?*\x00-\x1f]')
+_FORBIDDEN = compile(r'[<>:"|?*\x00-\x1f]')
 
 
 def toFiletime(seconds):
@@ -84,7 +83,7 @@ def packDescriptors(entries):
     @param entries: [FileEntry]
     @return: {bytes}
     """
-    out = [struct.pack('<I', len(entries))]
+    out = [pack('<I', len(entries))]
     for e in entries:
         attr = FILE_ATTRIBUTE_DIRECTORY if e.isDir else FILE_ATTRIBUTE_NORMAL
         if e.readOnly and not e.isDir:
@@ -97,7 +96,7 @@ def packDescriptors(entries):
         size = 0 if e.isDir else e.size
         name = e.name.encode('utf-16-le')[:_MAX_NAME * 2]
         name = name + b'\x00' * (520 - len(name))
-        out.append(struct.pack('<I16s8s8sIQQQII', flags, b'', b'', b'', attr, 0, 0, write,
+        out.append(pack('<I16s8s8sIQQQII', flags, b'', b'', b'', attr, 0, 0, write,
                                size >> 32, size & 0xFFFFFFFF) + name)
     return b''.join(out)
 
@@ -109,16 +108,16 @@ def parseDescriptors(data):
     """
     if len(data) < 4:
         return []
-    count = struct.unpack_from('<I', data, 0)[0]
+    count = unpack_from('<I', data, 0)[0]
     entries = []
     for i in range(count):
         off = 4 + i * FILE_DESCRIPTOR_SIZE
         if off + FILE_DESCRIPTOR_SIZE > len(data):
             break
-        flags = struct.unpack_from('<I', data, off)[0]
-        attr = struct.unpack_from('<I', data, off + 36)[0]
-        write = struct.unpack_from('<Q', data, off + 56)[0]
-        hi, lo = struct.unpack_from('<II', data, off + 64)
+        flags = unpack_from('<I', data, off)[0]
+        attr = unpack_from('<I', data, off + 36)[0]
+        write = unpack_from('<Q', data, off + 56)[0]
+        hi, lo = unpack_from('<II', data, off + 64)
         name = data[off + 72:off + 592].decode('utf-16-le', 'replace').split('\x00', 1)[0]
         isDir = bool(flags & FD_ATTRIBUTES and attr & FILE_ATTRIBUTE_DIRECTORY)
         size = ((hi << 32) | lo) if flags & FD_FILESIZE else None
@@ -137,30 +136,30 @@ class LocalFileList(object):
     def __init__(self, paths):
         self.entries = []
         for path in paths:
-            path = os.path.abspath(path)
-            base = os.path.basename(path.rstrip('\\/')) or path
+            path = abspath(path)
+            base = basename(path.rstrip('\\/')) or path
             self._add(base, path)
 
     def _add(self, name, path):
         if len(name) > _MAX_NAME:
-            log.warning("clipboard: path too long for Windows, skipped: %s" % name)
+            log.warning(u'clipboard: path too long for Windows, skipped: %s' % name)
             return
         try:
-            st = os.stat(path)
+            st = stat(path)
         except OSError as e:
-            log.warning("clipboard: cannot read %s: %s" % (path, e))
+            log.warning(u'clipboard: cannot read %s: %s' % (path, e))
             return
-        if os.path.isdir(path):
+        if isdir(path):
             self.entries.append(FileEntry(name, path, True, 0, st.st_mtime))
             try:
-                children = sorted(os.listdir(path))
+                children = sorted(listdir(path))
             except OSError as e:
-                log.warning("clipboard: cannot list %s: %s" % (path, e))
+                log.warning(u'clipboard: cannot list %s: %s' % (path, e))
                 return
             for child in children:
-                self._add(name + '\\' + child, os.path.join(path, child))
-        elif os.path.isfile(path):
-            readOnly = not os.access(path, os.W_OK)
+                self._add(name + '\\' + child, join(path, child))
+        elif isfile(path):
+            readOnly = not access(path, W_OK)
             self.entries.append(FileEntry(name, path, False, st.st_size, st.st_mtime, readOnly))
 
     def descriptors(self):
@@ -168,7 +167,7 @@ class LocalFileList(object):
 
     def size(self, index):
         e = self.entries[index]
-        return 0 if e.isDir else os.path.getsize(e.path)
+        return 0 if e.isDir else getsize(e.path)
 
     def read(self, index, position, length):
         e = self.entries[index]
@@ -187,12 +186,12 @@ def safeRelativePath(name):
     @return: {str} or None when nothing usable is left
     """
     parts = []
-    for part in re.split(r'[\\/]+', name):
+    for part in split(r'[\\/]+', name):
         part = _FORBIDDEN.sub('_', part).strip().rstrip('.')
         if part in ('', '.', '..'):
             continue
         parts.append(part)
-    return os.path.join(*parts) if parts else None
+    return join(*parts) if parts else None
 
 
 class RemoteDownload(object):
@@ -222,7 +221,7 @@ class RemoteDownload(object):
 
     def _localPath(self, i):
         rel = safeRelativePath(self.entries[i].name)
-        return None if rel is None else os.path.join(self.root, rel)
+        return None if rel is None else join(self.root, rel)
 
     def prepare(self):
         """Create the folders and empty files, collect the top-level items."""
@@ -230,10 +229,10 @@ class RemoteDownload(object):
         for i, e in enumerate(self.entries):
             path = self._localPath(i)
             if path is None:
-                log.warning("clipboard: invalid remote file name skipped: %r" % e.name)
+                log.warning(u'clipboard: invalid remote file name skipped: %r' % e.name)
                 continue
             self._localPaths[i] = path
-            top = os.path.join(self.root, os.path.relpath(path, self.root).split(os.sep)[0])
+            top = join(self.root, relpath(path, self.root).split(sep)[0])
             if top not in seen:
                 seen.add(top)
                 self.topLevel.append(top)
@@ -264,7 +263,7 @@ class RemoteDownload(object):
             path = self._localPaths.get(self.index)
             if e.isDir or path is None:
                 continue
-            makedirs(os.path.dirname(path))
+            makedirs(dirname(path))
             self.file = open(path, 'wb')
             self.position = 0
             self._sizeKnown = e.size is not None
@@ -281,7 +280,7 @@ class RemoteDownload(object):
             self.file = None
         if path and e.mtime:
             try:
-                os.utime(path, (e.mtime, e.mtime))
+                utime(path, (e.mtime, e.mtime))
             except OSError:
                 pass
 
@@ -289,12 +288,12 @@ class RemoteDownload(object):
         """Process the File Contents Response of the current request."""
         e = self.entries[self.index]
         if not ok:
-            log.warning("clipboard: server refused %s, skipped" % e.name)
+            log.warning(u'clipboard: server refused %s, skipped' % e.name)
             self.failed += 1
             self._closeFile()
             return
         if e.size is None and not self._sizeKnown:
-            e.size = struct.unpack_from('<Q', data.ljust(8, b'\x00'))[0]
+            e.size = unpack_from('<Q', data.ljust(8, b'\x00'))[0]
             self.total += e.size
             self._sizeKnown = True
             if e.size == 0:
@@ -305,7 +304,7 @@ class RemoteDownload(object):
         self.received += len(data)
         if self.position >= e.size or not data:
             if self.position < e.size:
-                log.warning("clipboard: %s truncated (%d of %d bytes)" % (e.name, self.position, e.size))
+                log.warning(u'Clipboard: %s truncated (%d of %d bytes)' % (e.name, self.position, e.size))
                 self.failed += 1
             self._closeFile()
 
@@ -320,14 +319,14 @@ _downloadRoots = []
 
 def newDownloadFolder():
     """Temporary folder for one paste; all of them are removed at exit."""
-    root = tempfile.mkdtemp(prefix="rdpyqt-clipboard-")
+    root = mkdtemp(prefix=u'rdpyqt-clipboard-')
     if not _downloadRoots:
-        import atexit
-        atexit.register(_cleanup)
+        from atexit import register
+        register(_cleanup)
     _downloadRoots.append(root)
     return root
 
 
 def _cleanup():
     for root in _downloadRoots:
-        shutil.rmtree(root, ignore_errors=True)
+        rmtree(root, ignore_errors=True)

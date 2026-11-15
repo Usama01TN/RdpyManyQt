@@ -14,14 +14,13 @@ security and feature options are editable in the property editor. Designer
 needs the Python plugin loader (pyqt5-tools / pyqt6-tools, or PySide's designer).
 """
 from __future__ import absolute_import, division, print_function
+from ManyQt.QtDesigner import QPyDesignerCustomWidgetPlugin
+from ManyQt.QtGui import QIcon
 from os.path import dirname, join
 from sys import path
 
 if dirname(__file__) not in path:
     path.append(dirname(__file__))
-
-from ManyQt.QtDesigner import QPyDesignerCustomWidgetPlugin
-from ManyQt.QtGui import QIcon
 
 try:
     from .rdpviewer import RdpViewerWidget
@@ -68,7 +67,7 @@ class RdpViewerPlugin(QPyDesignerCustomWidgetPlugin):
         """
         :return: str | unicode | QString
         """
-        return 'RdpViewerWidget'
+        return u'RdpViewerWidget'
 
     def group(self):
         """
@@ -92,8 +91,8 @@ class RdpViewerPlugin(QPyDesignerCustomWidgetPlugin):
         """
         :return: str | unicode | QString
         """
-        return 'Embeddable RDP client: set host, credentials, security and features, then call ' \
-               'connectToHost(). Signals: connected, disconnected, connectionFailed, stateChanged.'
+        return u'Embeddable RDP client: set host, credentials, security and features, then call ' \
+               u'connectToHost(). Signals: connected, disconnected, connectionFailed, stateChanged.'
 
     def isContainer(self):
         """
@@ -106,14 +105,14 @@ class RdpViewerPlugin(QPyDesignerCustomWidgetPlugin):
         Module uic-generated code imports the widget from.
         :return: str | unicode | QString
         """
-        return 'rdpy.ui.rdpviewer'
+        return u'rdpy.ui.rdpviewer'
 
     def domXml(self):
         """
         :return: str | unicode | QString
         """
-        return ('<widget class="RdpViewerWidget" name="rdpViewer">\n'
-                ' <property name="toolTip"><string>Remote Desktop (RDP) viewer</string></property>\n'
-                ' <property name="geometry"><rect><x>0</x><y>0</y><width>640</width><height>400</height></rect>'
-                '</property>\n'
-                '</widget>\n')
+        return (u'<widget class="RdpViewerWidget" name="rdpViewer">\n'
+                u' <property name="toolTip"><string>Remote Desktop (RDP) viewer</string></property>\n'
+                u' <property name="geometry"><rect><x>0</x><y>0</y><width>640</width><height>400</height></rect>'
+                u'</property>\n'
+                u'</widget>\n')

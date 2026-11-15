@@ -5,7 +5,7 @@ Public API: rlgr1_decode(data, output_size) -> np.ndarray(int16)
 Same semantics as rlgr1_decode.py; this .so shadows the .py when compiled.
 """
 
-import numpy as np
+from numpy import int16, zeros
 # typed memoryviews only: no NumPy C API, so NumPy is not a build dependency
 # (iOS / Android cross builds have no target NumPy to compile against)
 from libc.stdint cimport int16_t
@@ -133,7 +133,7 @@ def rlgr1_decode(data, int output_size):
         int16_t[:] out_view
 
     if data is None or len(data) == 0:
-        return np.zeros(output_size, dtype=np.int16)
+        return zeros(output_size, dtype=int16)
 
     data = bytes(data) if not isinstance(data, bytes) else data
     buf_mv = <const unsigned char[:len(data)]> (<const unsigned char *> <object> data)
@@ -141,7 +141,7 @@ def rlgr1_decode(data, int output_size):
     dlen = len(data)
     total = dlen * 8
 
-    output = np.zeros(output_size, dtype=np.int16)
+    output = zeros(output_size, dtype=int16)
     out_view = output
 
     while (total - pos + ab) > 0 and cnt < output_size:
