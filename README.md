@@ -23,9 +23,9 @@ pip install "rdpymanyqt[h264]" --find-links https://github.com/Usama01TN/RdpyMan
 Serial port, smart card and USB redirection need optional packages:
 
 ```sh
-pip install "rdpymanyqt[serial]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0      # pyserial
-pip install "rdpymanyqt[smartcard]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0   # pyscard (+ the PC/SC service: pcscd on Linux)
-pip install "rdpymanyqt[usb]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0         # python-libusb1 (+ libusb: bundled on Windows, the libusb-1.0
+"rdpymanyqt[serial]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0      # pyserial
+"rdpymanyqt[smartcard]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0   # pyscard (+ the PC/SC service: pcscd on Linux)
+"rdpymanyqt[usb]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0         # python-libusb1 (+ libusb: bundled on Windows, the libusb-1.0
                                       # package on Linux, brew install libusb on macOS)
 ```
 
@@ -33,7 +33,7 @@ On iOS and Android, PyPI has no wheels of NumPy, PyAV or cryptography: add Flet'
 index, which has them (and PyAV for H.264) for CPython 3.12 - 3.14:
 
 ```sh
-pip install --extra-index-url https://pypi.flet.dev "rdpymanyqt[h264]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0
+--extra-index-url https://pypi.flet.dev "rdpymanyqt[h264]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0
 ```
 
 (with Briefcase or another app packager, set `PIP_EXTRA_INDEX_URL=https://pypi.flet.dev`).
@@ -44,9 +44,9 @@ and the device redirection modules.
 
 Video decoding and audio playback need native code to run in real time:
 
-* Install PyAV (`pip install "rdpymanyqt[h264]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0`); without it the server falls back to much
+* Install PyAV (`"rdpymanyqt[h264]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0`); without it the server falls back to much
   slower codecs.
-* Build the Cython decoders: run `pip install .` from the project folder (on Windows this
+* Build the Cython decoders: run `.` from the project folder (on Windows this
   needs the *Microsoft C++ Build Tools*). At start-up the client logs which decoders are
   compiled and warns about the pure Python ones.
 * Sound plays through Qt Multimedia with any binding ManyQt supports (PyQt5, PyQt6,
@@ -105,7 +105,7 @@ running the client on a phone also needs a Qt binding built for it (the other de
 come from PyPI and Flet's index).
 
 32-bit Windows and Windows ARM64: recent cryptography releases (needed by pyOpenSSL) publish
-no wheels there, so install with `pip install --only-binary cryptography rdpymanyqt` to get
+no wheels there, so install with `--only-binary cryptography rdpymanyqt` to get
 the last release that has one instead of compiling it (Intel Macs get it automatically).
 
 Local builds: `python tools/build.py wheel | pure | sdist | cibw [android|ios] | check`.
@@ -538,7 +538,7 @@ server lets it go, and when it is unplugged.
 | `auto`                              | the devices plugged in while connected (hubs excepted)                    |
 
 ```sh
-pip install "rdpymanyqt[usb]"     # python-libusb1
+pip install "rdpymanyqt[usb]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0     # python-libusb1
 rdpyqt --usb-list
 rdpyqt -u user -p password --usb 0781:5567 --usb addr:1:7 server
 ```
