@@ -569,17 +569,17 @@ Available client-side protocol channels:
 | Channel | Option | RdpViewerWidget | What it does |
 |---|---|---|---|
 | `ainput` (Advanced Input) | on by default, `--no-advanced-input` | `advancedInput` | Servers that support this channel open it: mouse and wheel events then use it (32-bit coordinates, relative moves, high resolution wheel) |
-| `sshagent` (SSHAGENT) | `--ssh-agent` | `sshAgent` | programs in the session use the local ssh-agent (SSH_AUTH_SOCK, or the Windows OpenSSH agent pipe); keys never leave this computer |
-| `rdpecam` (MS-RDPECAM) | `--camera`, `--camera-device NAME`, `--camera-test` | `cameraRedirection`, `cameraDevice` | the cameras of this computer appear in the session (Windows); H.264 with PyAV, MJPEG otherwise |
-| `rdpei` (MS-RDPEI) | `--multitouch` | `multitouch` | touch screens (up to 64 fingers) and pens (pressure, rotation, tilt, eraser) as real touch and pen input in Windows |
-| `location` (MS-RDPEL) | `--location LAT,LON[,ALT]`, `--location auto` (Qt Positioning) | `location` | the session's location services get this position |
-| `echo` (MS-RDPEECO) | `--echo` | `echoChannel` | answers the server's round-trip measurements |
+| `sshagent` (SSHAGENT) | `--ssh-agent` | `sshAgent` | Programs in the session use the local ssh-agent (SSH_AUTH_SOCK, or the Windows OpenSSH agent pipe); keys never leave this computer |
+| `rdpecam` (MS-RDPECAM) | `--camera`, `--camera-device NAME`, `--camera-test` | `cameraRedirection`, `cameraDevice` | The cameras of this computer appear in the session (Windows); H.264 with PyAV, MJPEG otherwise |
+| `rdpei` (MS-RDPEI) | `--multitouch` | `multitouch` | Touch screens (up to 64 fingers) and pens (pressure, rotation, tilt, eraser) as real touch and pen input in Windows |
+| `location` (MS-RDPEL) | `--location LAT,LON[,ALT]`, `--location auto` (Qt Positioning) | `location` | The session's location services get this position |
+| `echo` (MS-RDPEECO) | `--echo` | `echoChannel` | Answers the server's round-trip measurements |
 | `rdp2tcp` | `--rdp2tcp COMMAND` | `rdp2tcpCommand` | TCP forwarding through the RDP connection with the [rdp2tcp](https://github.com/V-E-O/rdp2tcp) tool (rdp2tcp.exe runs in the session) |
-| `video` + `geometry` (MS-RDPEVOR, MS-RDPEGT) | `--video` (`--geometry` alone) | `videoRedirection` | videos playing in the session come as H.264 and are drawn where they play, instead of being re-encoded as desktop updates |
+| `video` + `geometry` (MS-RDPEVOR, MS-RDPEGT) | `--video` (`--geometry` alone) | `videoRedirection` | Videos playing in the session come as H.264 and are drawn where they play, instead of being re-encoded as desktop updates |
 | `encomsp` (MS-RDPEMSC) | `--encomsp` (on with `--assistance`), `--no-request-control` | `requestRemoteControl()` | Remote Assistance: requests the control of the novice's desktop; Shift + right-click > *Request control* / *View only* |
 | `tsmf` (MS-RDPEV) | `--multimedia` | `multimediaRedirection` | Windows Media Player playback (WMV / VC-1, H.264, MPEG-2, WMA, MP3, AAC, AC-3) is sent compressed and decoded here (PyAV); the video is drawn where the player is, the audio plays on this computer's speakers |
 | `rdpewa` (MS-RDPEWA) | `--webauthn` | `webAuthn` | passkey / security key sign-ins in the session (browsers, Windows Hello for Business) use the FIDO2 key plugged into this computer; its PIN is asked in a dialog. Needs `pip install fido2` (or `pip install .[webauthn]`); on Windows raw security key access needs administrator rights, on Linux access to the hidraw device |
-| `remdesk` (Remote Assistance) | `--assistance FILE --assistance-password PASS` | `setRemoteAssistance(file, password)` | connect as the expert of a Windows Remote Assistance invitation (.msrcincident); the address comes from the invitation |
+| `remdesk` (Remote Assistance) | `--assistance FILE --assistance-password PASS` | `setRemoteAssistance(file, password)` | Connect as the expert of a Windows Remote Assistance invitation (.msrcincident); the address comes from the invitation |
 
 Remote Assistance: `remdesk` authenticates the expert, `encomsp` requests the control.
 
@@ -596,4 +596,4 @@ like to support development further:
 - **Ba9chich (Leave a tip):** [ba9chich.com/fr/IninouUsama](https://ba9chich.com/fr/IninouUsama)
 - **Ko-fi (Buy me a coffee for extra energy):** [ko-fi.com/usamatn](https://ko-fi.com/usamatn)
 
-Thank you so much <3, Have a nice day :)
+Thank you so much <3, have a nice day :)
