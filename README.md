@@ -4,32 +4,28 @@
 
 ## Project description:
 
-Microsoft RDP client built with Python, [Twisted](https://twisted.org/)
-and [ManyQt](https://github.com/Usama01TN/ManyQt).
-
-It is forked from https://github.com/citronneur/rdpy.
-While rdpy has various commands, this project only includes the RDP client.
+RdpyManyQt is a Python-based remote desktop client that brings Microsoft Remote Desktop Protocol (RDP) functionality into a desktop application. Built with Twisted for networking and ManyQt for its graphical interface, it provides a straightforward way to connect to and interact with remote desktop machines.
 
 [![screenshot](screenshot.png)](https://youtu.be/dQw4w9WgXcQ)
 
 ## Installation:
 
 ```sh
-pip install rdpymanyqt
+pip install rdpymanyqt --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0
 ```
 
 To use the H.264 decoding feature, please install it as follows.
 
 ```sh
-pip install "rdpymanyqt[h264]"
+pip install "rdpymanyqt[h264]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0
 ```
 
 Serial port, smart card and USB redirection need optional packages:
 
 ```sh
-pip install "rdpymanyqt[serial]"      # pyserial
-pip install "rdpymanyqt[smartcard]"   # pyscard (+ the PC/SC service: pcscd on Linux)
-pip install "rdpymanyqt[usb]"         # python-libusb1 (+ libusb: bundled on Windows, the libusb-1.0
+pip install "rdpymanyqt[serial]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0      # pyserial
+pip install "rdpymanyqt[smartcard]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0   # pyscard (+ the PC/SC service: pcscd on Linux)
+pip install "rdpymanyqt[usb]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0         # python-libusb1 (+ libusb: bundled on Windows, the libusb-1.0
                                       # package on Linux, brew install libusb on macOS)
 ```
 
@@ -37,7 +33,7 @@ On iOS and Android, PyPI has no wheels of NumPy, PyAV or cryptography: add Flet'
 index, which has them (and PyAV for H.264) for CPython 3.12 - 3.14:
 
 ```sh
-pip install --extra-index-url https://pypi.flet.dev "rdpymanyqt[h264]"
+pip install --extra-index-url https://pypi.flet.dev "rdpymanyqt[h264]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0
 ```
 
 (with Briefcase or another app packager, set `PIP_EXTRA_INDEX_URL=https://pypi.flet.dev`).
@@ -48,7 +44,7 @@ and the device redirection modules.
 
 Video decoding and audio playback need native code to run in real time:
 
-* Install PyAV (`pip install "rdpyqt[h264]"`); without it the server falls back to much
+* Install PyAV (`pip install "rdpymanyqt[h264]" --find-links https://github.com/Usama01TN/RdpyManyQt/releases/expanded_assets/v3.7.0`); without it the server falls back to much
   slower codecs.
 * Build the Cython decoders: run `pip install .` from the project folder (on Windows this
   needs the *Microsoft C++ Build Tools*). At start-up the client logs which decoders are
@@ -196,21 +192,21 @@ rdpyqt -u user -p password -w 1920 -h 1080 rdp_server:3389
 | `--share DIR[=NAME]`               | Same as `--drive NAME=DIR`                                                                                                                     |          |
 | `--size WIDTHxHEIGHT`              | Same as `-w` / `-h`                                                                                                                            |          |
 | `--connect-timeout MS`             | Give up when the connection (TCP connect and RDP connection sequence) is not established in time                                               | `15000`  |
-| `--timeout MS`                     | Drop a connection whose data is not acknowledged in time (FreeRDP `/timeout`); TCP keep-alive (5 s, every 2 s, 3 probes) detects a dead server | `9000`   |
+| `--timeout MS`                     | Drop a connection whose data is not acknowledged in time; TCP keep-alive (5 s, every 2 s, 3 probes) detects a dead server | `9000`   |
 | `--shell COMMAND`, `--workdir DIR` | Start a program instead of the desktop (the server policy must allow it)                                                                       |          |
 | `--no-dynamic-resolution`          | Resizing the window reconnects with the new size instead of using the display control channel (`--dynamic-resolution` turns it back on)        | dynamic  |
-| `--scale-desktop PERCENT`          | Remote desktop scale factor, 100 - 500 (FreeRDP `/scale-desktop`)                                                                              | `100`    |
-| `--scale-device 100\|140\|180`      | Remote device scale factor (FreeRDP `/scale-device`)                                                                                           | `100`    |
+| `--scale-desktop PERCENT`          | Remote desktop scale factor, 100 - 500                                                                              | `100`    |
+| `--scale-device 100\|140\|180`      | Remote device scale factor                                                                                           | `100`    |
 | `--app-cmd ARGS`, `--app-workdir DIR`, `--app-hidef on\|off` | Command line, working folder and Enhanced RemoteApp of `--app` (see *RemoteApp*)                                    |          |
 | `--usb-list`                       | List the local USB devices (bus, address, ids) and exit                                                                                        |          |
 
 ### Security:
 
-The protocols the client offers follow FreeRDP's `rdpSettings` flags (`NlaSecurity`,
+The protocols the client offers are controlled by the security settings (`NlaSecurity`,
 `TlsSecurity`, `RdpSecurity`, `IgnoreCertificate`). The strongest enabled protocol is tried
-first; when the server refuses it the next enabled one is tried (FreeRDP `nego.c`).
+first; when the server refuses it the next enabled one is tried.
 
-| Option                      | FreeRDP equivalent             | Effect                                                    |
+| Option                      | Related setting                | Effect                                                    |
 |-----------------------------|--------------------------------|-----------------------------------------------------------|
 | `--sec nla\|tls\|rdp`       | `/sec:`                        | Offer only this protocol                                  |
 | `--sec-nla on\|off`         | `NlaSecurity`                  | Network Level Authentication (needs user + password)      |
@@ -275,7 +271,7 @@ group. Logo and banner are in `branding/` (SVG, PNG, ICO).
 ### Logon events:
 
 The client tells apart the two stages of a connection, from what the server sends
-(MS-RDPBCGR Save Session Info, as FreeRDP's `SaveSessionInfo` callback):
+(MS-RDPBCGR Save Session Info notification):
 
 | Event        | When                                                                                      | rdpyqt option           | Qt signal (QRemoteDesktop / RdpViewerWidget) | Observer callback                   |
 |--------------|-------------------------------------------------------------------------------------------|-------------------------|----------------------------------------------|-------------------------------------|
@@ -323,9 +319,9 @@ reconnects with the new size, which then fills it).
 
 By default the remote resolution follows the window: when the server offers the display
 control channel it changes without reconnecting (see *Dynamic resolution*), otherwise resizing
-the window reconnects with the new size. With **smart sizing** (as mstsc's *Smart sizing* and FreeRDP's `/smart-sizing`)
+the window reconnects with the new size. With **smart sizing** (as mstsc's *Smart sizing* and the `/smart-sizing` option)
 the remote desktop keeps its resolution and is scaled to cover the whole window instead (no
-black bars, as mstsc and FreeRDP), with no reconnection; the mouse is mapped back to remote
+black bars, as common remote desktop clients), with no reconnection; the mouse is mapped back to remote
 coordinates. `--keep-aspect` / *Keep aspect ratio* letterboxes with black bars instead.
 
 - `rdpyqt --smart-sizing ...` (`--keep-aspect` for black bars); switch it at any time with
@@ -336,7 +332,7 @@ coordinates. `--keep-aspect` / *Keep aspect ratio* letterboxes with black bars i
 
 What smart sizing covers: scaled painting with smooth filtering (partial repaints identical to a
 full repaint, no seams), black letterbox bars, mouse moves / clicks / wheel mapped to remote
-coordinates (clamped at the edges), the remote pointer scaled with its hot spot like FreeRDP,
+coordinates (clamped at the edges), the remote pointer scaled with its hot spot consistently,
 resolution changes decided by the server (Demand Active, RDPGFX ResetGraphics) followed
 without reconnecting, window resize / maximize / full screen without reconnecting, HiDPI
 displays, switching on and off at any time (a window goes back to 1:1; an embedded widget
@@ -350,14 +346,14 @@ quiet terminal; `rdpyqt` shows INFO messages. Set `RDPY_LOG_LEVEL=DEBUG` (or `IN
 
 ### Disconnecting:
 
-Closing the window disconnects like FreeRDP's `freerdp_disconnect`: input stops, the local audio
+Closing the window performs an orderly protocol disconnect: input stops, the local audio
 devices, decoder and drive threads are released, the Disconnect Provider Ultimatum (reason
 *user requested*) is sent and the client waits for the server to close its side (forcing the
 socket closed after 2 s at most), then exits. A protocol error ends the session at once with the
 cause in the disconnect dialog; an error inside a virtual channel (clipboard, sound, drives...)
 only drops that message.
 
-Every way of ending the client disconnects the same clean way (tested against FreeRDP's
+Every way of ending the client disconnects the same clean way (tested against the protocol implementation's
 server, which then logs *ERRINFO_LOGOFF_BY_USER*, as for its own client):
 
 | How it ends                                          | What happens                                                                       |
@@ -370,7 +366,7 @@ server, which then logs *ERRINFO_LOGOFF_BY_USER*, as for its own client):
 
 Applications embedding the client call `rdpy.ui.qt.installCleanExit(app)` after starting the
 reactor to get the same behaviour (RdpViewerWidget installs the `aboutToQuit` part itself).
-As with mstsc and FreeRDP, disconnecting leaves the Windows session *disconnected* (the user
+As with standard remote desktop clients, disconnecting leaves the Windows session *disconnected* (the user
 stays signed in, ready to reconnect); sign out from the Start menu, or set the server's time
 limit for disconnected sessions, to end it.
 
@@ -430,7 +426,7 @@ is skipped with a warning.
 
 ### Device redirection: printers, serial / parallel ports, smart cards:
 
-The other `rdpdr` devices follow FreeRDP's channels (`printer`, `serial`, `parallel`,
+The other `rdpdr` devices use the standard device channels (`printer`, `serial`, `parallel`,
 `smartcard`) and their `/printer`, `/serial`, `/parallel` and `/smartcard` options:
 
 | Option                                       | Effect                                                                                                                                  |
@@ -464,14 +460,14 @@ its requests are emulated on top of pyserial: baud rate, line control, flow cont
 (`COMMTIMEOUTS`, including the interval and "return immediately" modes), `WaitCommEvent`
 masks, purge, status and statistics. Reads, writes and waits run on their own threads, so a
 pending read never blocks the other requests, and they are cancelled when the port is closed
-or purged. `DRIVER` (`Serial`, `SerCx`, `SerCx2`) is accepted for FreeRDP compatibility;
+or purged. `DRIVER` (`Serial`, `SerCx`, `SerCx2`) is accepted for compatibility;
 `permissive` reports unsupported requests as successful.
 
 **Parallel ports** ([MS-RDPESP]): what applications write to `LPTn` goes to the local device.
 
 **Smart cards** ([MS-RDPESC]): the WinSCard calls of the session (smart card logon,
 certificates, PIV / PKCS#11 middleware) run on the local readers through PC/SC: pcsc-lite on
-Linux and BSD, the PCSC framework on macOS, WinSCard on Windows. As in FreeRDP (winpr), the
+Linux and BSD, the PCSC framework on macOS, WinSCard on Windows. The
 pcsc-lite differences are converted (protocols, card states, error and control codes), and
 the calls PC/SC lacks are emulated (card cache, transmit count, reader names as attributes,
 device type). Each context has its own threads, `SCardGetStatusChange` waits on its own PC/SC
@@ -483,7 +479,7 @@ smart cards.
 
 ### Dynamic resolution:
 
-With the display control channel ([MS-RDPEDISP], FreeRDP `/dynamic-resolution`), resizing the
+With the display control channel ([MS-RDPEDISP]), resizing the
 `rdpyqt` window changes the resolution of the session without reconnecting: the client sends
 the new monitor layout (even width, 200 - 8192 pixels, within the server's largest area, at most
 one every 500 ms, the last size wins) and the server switches with an RDPGFX ResetGraphics or,
@@ -501,14 +497,14 @@ window changed size while connecting, the session takes the window size at once.
 
 ### RemoteApp:
 
-With `--app` (FreeRDP `/app`, [MS-RDPERP]) the server runs one program instead of the desktop
+With `--app` ([MS-RDPERP]) the server runs one program instead of the desktop
 and each of its windows becomes a local window: menus, dialogs, tool windows and notification
 area icons included, with their titles and icons, in the task bar.
 
 ```sh
 rdpyqt -u user -p password --app '||notepad' server                     # published RemoteApp alias
 rdpyqt -u user -p password --app 'C:\Windows\System32\notepad.exe' --app-cmd 'C:\notes.txt' server
-rdpyqt -u user -p password --app 'program:||calc,workdir:C:\temp' server  # FreeRDP syntax
+rdpyqt -u user -p password --app 'program:||calc,workdir:C:\temp' server  # alternate application syntax
 ```
 
 The program must be published as a RemoteApp on the server (`||alias`), or the server must
@@ -524,12 +520,12 @@ shown where the compositor puts them.
 RdpViewerWidget: `remoteApp`, `remoteAppArguments`, `remoteAppWorkingDirectory` properties
 (the widget shows a placeholder, the program's windows are separate windows) and the
 `remoteAppFailed(reason)` signal. Controller: `setRemoteApp(app)` (`rail.RemoteApp` or a
-FreeRDP `/app` description), `getRailLayer()` for window commands, observers get
+the protocol implementation `/app` description), `getRailLayer()` for window commands, observers get
 `onRailEvent(kind, ...)`; `rdpy.ui.rail_qt.RailManager` draws the windows.
 
 ### USB redirection:
 
-`--usb` (FreeRDP `/usb`, [MS-RDPEUSB]) hands local USB devices to the server, where their
+`--usb` ([MS-RDPEUSB]) hands local USB devices to the server, where their
 Windows drivers run: control, bulk, interrupt and isochronous transfers, configuration and
 interface selection, Microsoft OS descriptors, stall recovery, cancellation. While redirected
 the device is taken from the local drivers; it is given back when the session ends, when the
@@ -560,34 +556,19 @@ storage, keyboards and mice). RdpViewerWidget: `usbDevices` property; controller
 [rdpy](https://github.com/citronneur/rdpy) by [Sylvain Peyrefitte](https://github.com/citronneur), licensed
 [GPL-3.0-or-later](LICENSE).
 It is not an official rdpyqt release. See [CHANGELOG.md](CHANGELOG.md) for the changes and [NOTICE](NOTICE) for credits
-(including the FreeRDP logic it follows).
+(including the protocol behavior it implements).
 
-### Support:
-
-If RdpyManyQt is helpful and useful to you, a star on GitHub would mean a lot and helps others discover them. If you'd
-like to support development further:
-
-<p>
-  <a href="https://ba9chich.com/fr/IninouUsama"><img src="https://img.shields.io/badge/ba9chich-Support%20me-E4002B?style=for-the-badge" alt="Support me on ba9chich"></a>
-  <a href="https://ko-fi.com/usamatn"><img src="https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Buy me a coffee on Ko-fi"></a>
-</p>
-
-- **Ba9chich (Leave a tip):** [ba9chich.com/fr/IninouUsama](https://ba9chich.com/fr/IninouUsama)
-- **Ko-fi (Buy me a coffee for extra energy):** [ko-fi.com/usamatn](https://ko-fi.com/usamatn)
-
-Thank you so much <3 :)
-
-### FreeRDP channels
+### Additional protocol channels:
 
 All the virtual channels are in `rdpy/protocol/rdp/channels/` (one module per channel, like
-FreeRDP's `channels/` folder); import them as `rdpy.protocol.rdp.channels.<name>`. The names
+the protocol implementation's `channels/` folder); import them as `rdpy.protocol.rdp.channels.<name>`. The names
 used before 3.7.0 (`rdpy.protocol.rdp.<name>`) still import the same modules.
 
-Ported from FreeRDP's `channels/` (client side):
+Available client-side protocol channels:
 
 | Channel | Option | RdpViewerWidget | What it does |
 |---|---|---|---|
-| `ainput` (FreeRDP::Advanced::Input) | on by default, `--no-advanced-input` | `advancedInput` | FreeRDP based servers open it: mouse and wheel events then use it (32-bit coordinates, relative moves, high resolution wheel) |
+| `ainput` (Advanced Input) | on by default, `--no-advanced-input` | `advancedInput` | Servers that support this channel open it: mouse and wheel events then use it (32-bit coordinates, relative moves, high resolution wheel) |
 | `sshagent` (SSHAGENT) | `--ssh-agent` | `sshAgent` | programs in the session use the local ssh-agent (SSH_AUTH_SOCK, or the Windows OpenSSH agent pipe); keys never leave this computer |
 | `rdpecam` (MS-RDPECAM) | `--camera`, `--camera-device NAME`, `--camera-test` | `cameraRedirection`, `cameraDevice` | the cameras of this computer appear in the session (Windows); H.264 with PyAV, MJPEG otherwise |
 | `rdpei` (MS-RDPEI) | `--multitouch` | `multitouch` | touch screens (up to 64 fingers) and pens (pressure, rotation, tilt, eraser) as real touch and pen input in Windows |
@@ -602,3 +583,17 @@ Ported from FreeRDP's `channels/` (client side):
 
 Remote Assistance: `remdesk` authenticates the expert, `encomsp` requests the control.
 
+### Support:
+
+If RdpyManyQt is helpful and useful to you, a star on GitHub would mean a lot and helps others discover them. If you'd
+like to support development further:
+
+<p>
+  <a href="https://ba9chich.com/fr/IninouUsama"><img src="https://img.shields.io/badge/ba9chich-Support%20me-E4002B?style=for-the-badge" alt="Support me on ba9chich"></a>
+  <a href="https://ko-fi.com/usamatn"><img src="https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?style=for-the-badge&logo=ko-fi&logoColor=white" alt="Buy me a coffee on Ko-fi"></a>
+</p>
+
+- **Ba9chich (Leave a tip):** [ba9chich.com/fr/IninouUsama](https://ba9chich.com/fr/IninouUsama)
+- **Ko-fi (Buy me a coffee for extra energy):** [ko-fi.com/usamatn](https://ko-fi.com/usamatn)
+
+Thank you so much <3, Have a nice day :)
